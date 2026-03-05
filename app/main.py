@@ -6,18 +6,20 @@ from contextlib import asynccontextmanager
 import secrets
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import Depends, FastAPI, Form, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
 from app import database as db
 from app.config import AUDIO_DIR, AUTH_PASS, AUTH_USER, BASE_URL, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
-from app.downloader import download_single, is_oauth_authenticated, oauth_state, poll_all, poll_channel, remove_channel_data, start_oauth_flow
+from app.downloader import cookies_status, download_single, poll_all, poll_channel, remove_channel_data
 from app.feed import build_feed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+VERSION = "1.0.1"
 
 security = HTTPBasic()
 
@@ -78,44 +80,35 @@ def _feed_url(channel_id: str) -> str:
 
 
 def _render_auth_card() -> str:
-    status = oauth_state["status"]
-    authenticated = is_oauth_authenticated()
-
-    if authenticated and status not in ("pending", "starting", "error"):
-        badge = '<span style="color:#4a7c3f;font-weight:600">&#10003; Authenticated</span>'
-        action = '<form method="post" action="/auth/youtube" style="display:inline"><button class="btn-secondary">Re-authenticate</button></form>'
-        refresh = ""
-    elif status == "pending" and oauth_state["url"]:
-        url = oauth_state["url"]
-        code = oauth_state["code"] or ""
-        badge = '<span style="color:#a06020;font-weight:600">&#9679; Waiting for login&hellip;</span>'
-        action = f'''
-            <p style="margin:12px 0 6px;font-size:0.9rem">
-                1. Visit <a href="{url}" target="_blank" style="color:#36558f">{url}</a><br>
-                2. Enter code <strong style="font-size:1.1rem;letter-spacing:.1em">{code}</strong>
-            </p>'''
-        refresh = '<script>setTimeout(()=>location.reload(),5000)</script>'
-    elif status in ("starting",):
-        badge = '<span style="color:#a06020;font-weight:600">&#9679; Starting&hellip;</span>'
-        action = ""
-        refresh = '<script>setTimeout(()=>location.reload(),3000)</script>'
-    elif status == "error":
-        badge = f'<span style="color:#a03030;font-weight:600">&#10007; Error</span> <span style="font-size:0.8rem;color:#96acb7">{oauth_state["error"] or ""}</span>'
-        action = '<form method="post" action="/auth/youtube" style="display:inline"><button class="btn-secondary">Retry</button></form>'
-        refresh = ""
+    cs = cookies_status()
+    if cs["present"]:
+        badge = f'<span style="color:#4a7c3f;font-weight:600">&#10003; Cookies active</span> <span style="font-size:0.8rem;color:#96acb7">updated {cs["updated"]}</span>'
     else:
-        badge = '<span style="color:#96acb7">Not authenticated</span>'
-        action = '<form method="post" action="/auth/youtube" style="display:inline"><button class="btn-primary">Authenticate with YouTube</button></form>'
-        refresh = ""
+        badge = '<span style="color:#a03030;font-weight:600">&#10007; No cookies</span> <span style="font-size:0.8rem;color:#96acb7">YouTube may block downloads</span>'
 
     return f"""
         <div class="card">
-            <div class="card-header">YouTube Authentication</div>
-            <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-                {badge}
-                {action}
+            <div class="card-header">YouTube Cookies</div>
+            <div class="card-body">
+                <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+                    {badge}
+                </div>
+                <form class="add-form" method="post" action="/auth/cookies" enctype="multipart/form-data">
+                    <input type="file" name="file" accept=".txt" required
+                           style="flex:1;min-width:200px;padding:8px;border:1px solid #d4e4bc;border-radius:6px;background:#f8fbf5;font-size:0.85rem">
+                    <button type="submit" class="btn-primary">Upload cookies.txt</button>
+                </form>
+                <details style="margin-top:14px">
+                    <summary style="font-size:0.82rem;color:#36558f;cursor:pointer;user-select:none">How to export cookies.txt</summary>
+                    <ol style="margin:10px 0 0 18px;font-size:0.82rem;color:#1a2335;line-height:1.9">
+                        <li>Install the <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" style="color:#36558f">Get cookies.txt LOCALLY</a> extension in Chrome (or <a href="https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/" target="_blank" style="color:#36558f">cookies.txt</a> in Firefox)</li>
+                        <li>Go to <a href="https://www.youtube.com" target="_blank" style="color:#36558f">youtube.com</a> and make sure you are logged in</li>
+                        <li>Click the extension icon and export as <strong>cookies.txt</strong></li>
+                        <li>Upload the file using the form above</li>
+                        <li>Cookies expire after a few weeks — repeat when downloads start failing with a bot error</li>
+                    </ol>
+                </details>
             </div>
-            {refresh}
         </div>"""
 
 
@@ -316,6 +309,15 @@ def _render_ui() -> str:
         }}
         .btn-copy:hover {{ opacity: 1; }}
 
+        .version {{
+            position: fixed;
+            bottom: 12px;
+            right: 16px;
+            font-size: 0.72rem;
+            color: #96acb7;
+            opacity: 0.6;
+        }}
+
         .toggle-label {{
             display: flex;
             align-items: center;
@@ -387,6 +389,7 @@ def _render_ui() -> str:
             </div>
         </div>
     </main>
+    <div class="version">v{VERSION}</div>
 </body>
 </html>"""
 
@@ -445,9 +448,15 @@ def remove_channel(url: str = Form(...)):
     return RedirectResponse("/", status_code=302)
 
 
-@app.post("/auth/youtube")
-def auth_youtube():
-    start_oauth_flow()
+@app.post("/auth/cookies")
+async def upload_cookies(file: UploadFile = File(...)):
+    if not COOKIES_FILE:
+        raise HTTPException(status_code=500, detail="COOKIES_FILE env var not set")
+    os.makedirs(os.path.dirname(COOKIES_FILE), exist_ok=True)
+    content = await file.read()
+    with open(COOKIES_FILE, "wb") as f:
+        f.write(content)
+    logger.info("Cookies file updated (%d bytes)", len(content))
     return RedirectResponse("/", status_code=302)
 
 
