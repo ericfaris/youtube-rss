@@ -408,11 +408,27 @@ def _render_ui() -> str:
             const btn = e.target.closest('.btn-copy');
             if (!btn) return;
             const url = btn.dataset.url;
-            navigator.clipboard.writeText(url).then(() => {{
+            function onSuccess() {{
                 btn.textContent = '\u2713';
                 setTimeout(() => btn.innerHTML = '&#128203;', 1500);
-            }});
+            }}
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                navigator.clipboard.writeText(url).then(onSuccess).catch(() => fallback(url, onSuccess));
+            }} else {{
+                fallback(url, onSuccess);
+            }}
         }});
+        function fallback(text, onSuccess) {{
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            try {{ document.execCommand('copy'); onSuccess(); }} catch(e) {{ prompt('Copy this URL:', text); }}
+            document.body.removeChild(ta);
+        }}
     </script>
 </body>
 </html>"""
