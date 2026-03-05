@@ -80,10 +80,12 @@ app.mount("/thumbnails", StaticFiles(directory=THUMBNAIL_DIR), name="thumbnails"
 
 def _feed_url(channel_id: str) -> str:
     """Return feed URL with credentials embedded if auth is configured."""
-    from urllib.parse import urlparse, urlunparse
+    from urllib.parse import urlparse, urlunparse, quote
     parsed = urlparse(BASE_URL)
     if AUTH_USER and AUTH_PASS:
-        netloc = f"{AUTH_USER}:{AUTH_PASS}@{parsed.netloc}"
+        user = quote(AUTH_USER, safe="")
+        passwd = quote(AUTH_PASS, safe="")
+        netloc = f"{user}:{passwd}@{parsed.netloc}"
     else:
         netloc = parsed.netloc
     base = urlunparse(parsed._replace(netloc=netloc))
