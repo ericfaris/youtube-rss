@@ -1,15 +1,14 @@
+import base64
 import html as _html
 import logging
 import os
+import secrets
 import threading
 from contextlib import asynccontextmanager
 
-import secrets
-
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
 from app import database as db
@@ -32,18 +31,8 @@ def _get_version() -> str:
 
 VERSION = _get_version()
 
-security = HTTPBasic()
-
-def require_auth(credentials: HTTPBasicCredentials = Depends(security)):
-    if not AUTH_USER and not AUTH_PASS:
-        return  # auth disabled if no credentials configured
-    ok = (
-        secrets.compare_digest(credentials.username.encode(), AUTH_USER.encode()) and
-        secrets.compare_digest(credentials.password.encode(), AUTH_PASS.encode())
-    )
-    if not ok:
-        raise HTTPException(status_code=401, detail="Unauthorized",
-                            headers={"WWW-Authenticate": "Basic"})
+# Paths that podcast apps access — no auth required
+_PUBLIC_PREFIXES = ("/feed/", "/audio/", "/thumbnails/", "/health")
 
 
 @asynccontextmanager
@@ -66,7 +55,26 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 
-app = FastAPI(title="YouTube RSS", lifespan=lifespan, dependencies=[Depends(require_auth)])
+app = FastAPI(title="YouTube RSS", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if not AUTH_USER and not AUTH_PASS:
+        return await call_next(request)
+    if request.url.path.startswith(_PUBLIC_PREFIXES):
+        return await call_next(request)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth_header[6:]).decode()
+            username, password = decoded.split(":", 1)
+            if (secrets.compare_digest(username.encode(), AUTH_USER.encode()) and
+                    secrets.compare_digest(password.encode(), AUTH_PASS.encode())):
+                return await call_next(request)
+        except Exception:
+            pass
+    return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="YouTube RSS"'})
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(THUMBNAIL_DIR, exist_ok=True)
@@ -79,17 +87,7 @@ app.mount("/thumbnails", StaticFiles(directory=THUMBNAIL_DIR), name="thumbnails"
 # ---------------------------------------------------------------------------
 
 def _feed_url(channel_id: str) -> str:
-    """Return feed URL with credentials embedded if auth is configured."""
-    from urllib.parse import urlparse, urlunparse, quote
-    parsed = urlparse(BASE_URL)
-    if AUTH_USER and AUTH_PASS:
-        user = quote(AUTH_USER, safe="")
-        passwd = quote(AUTH_PASS, safe="")
-        netloc = f"{user}:{passwd}@{parsed.netloc}"
-    else:
-        netloc = parsed.netloc
-    base = urlunparse(parsed._replace(netloc=netloc))
-    return f"{base}/feed/{channel_id}.xml"
+    return f"{BASE_URL}/feed/{channel_id}.xml"
 
 
 def _render_auth_card() -> str:
