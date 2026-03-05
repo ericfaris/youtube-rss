@@ -48,13 +48,16 @@ def _base_ydl_opts() -> dict:
     opts = {"quiet": True, "no_warnings": True}
     if COOKIES_FILE and os.path.exists(COOKIES_FILE):
         opts["cookiefile"] = COOKIES_FILE
+        logger.info("Using cookies file: %s (%d bytes)", COOKIES_FILE, os.path.getsize(COOKIES_FILE))
+    else:
+        logger.warning("No cookies file found at %s — downloads may fail", COOKIES_FILE)
     return opts
 
 
 def _ydl_opts(channel_id: str) -> dict:
     return {
         **_base_ydl_opts(),
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",

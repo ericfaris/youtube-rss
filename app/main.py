@@ -19,7 +19,17 @@ from app.feed import build_feed
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-VERSION = "1.0.1"
+def _get_version() -> str:
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ["git", "describe", "--tags", "--abbrev=0"],
+            stderr=subprocess.DEVNULL
+        ).decode().strip().lstrip("v")
+    except Exception:
+        return "unknown"
+
+VERSION = _get_version()
 
 security = HTTPBasic()
 
