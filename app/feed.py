@@ -18,11 +18,13 @@ def build_feed(channel_id: str) -> bytes:
     feed_url = f"{BASE_URL}/feed/{channel_id}.xml"
     fg.id(feed_url)
     fg.title(channel_name)
+    fg.link(href=f"https://www.youtube.com/channel/{channel_id}", rel="alternate")
     fg.link(href=feed_url, rel="self")
     fg.language("en")
     fg.description(f"Audio podcast feed for {channel_name}")
     fg.podcast.itunes_author(channel_name)
     fg.podcast.itunes_explicit("no")
+    fg.podcast.itunes_category("Technology")
     fg.podcast.itunes_image(f"{BASE_URL}/thumbnails/{channel_id}/channel.jpg")
 
     for ep in episodes:
