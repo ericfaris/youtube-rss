@@ -12,7 +12,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
 from app import database as db
-from app.config import AUDIO_DIR, AUTH_PASS, AUTH_USER, BASE_URL, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
+from app.config import AUDIO_DIR, AUTH_PASS, AUTH_USER, BASE_URL, COOKIES_FILE, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
 from app.downloader import cookies_status, download_single, poll_all, poll_channel, remove_channel_data
 from app.feed import build_feed
 
