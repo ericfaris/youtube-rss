@@ -12,3 +12,4 @@ services:
       - MAX_EPISODES_PER_CHANNEL=5
       - POLL_INTERVAL_HOURS=2
       - DATA_DIR=/data
+      # - COOKIES_FILE=/data/cookies.txt

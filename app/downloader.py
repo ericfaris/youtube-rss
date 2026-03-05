@@ -1,5 +1,7 @@
 import logging
 import os
+import re
+import threading
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -7,7 +9,7 @@ from datetime import datetime, timezone
 import yt_dlp
 
 from app import database as db
-from app.config import AUDIO_DIR, MAX_EPISODES_PER_CHANNEL, THUMBNAIL_DIR
+from app.config import AUDIO_DIR, COOKIES_FILE, MAX_EPISODES_PER_CHANNEL, THUMBNAIL_DIR, YTDLP_CACHE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +37,72 @@ def _audio_dir_for(channel_id: str) -> str:
     return path
 
 
+oauth_state: dict = {"status": "idle", "url": None, "code": None, "error": None}
+_oauth_lock = threading.Lock()
+
+
+def is_oauth_authenticated() -> bool:
+    cache = os.path.join(YTDLP_CACHE_DIR, "youtube-oauth2.token")
+    return os.path.exists(cache)
+
+
+class _OAuthLogger:
+    """Captures yt-dlp output during OAuth device flow to extract the auth URL and code."""
+    def debug(self, msg):
+        if "google.com/device" in msg or "youtube.com/device" in msg:
+            url_match = re.search(r"https://\S+", msg)
+            code_match = re.search(r"code\s+([A-Z0-9]{4}-[A-Z0-9]{4})", msg)
+            if url_match:
+                oauth_state["url"] = url_match.group(0).rstrip(".")
+            if code_match:
+                oauth_state["code"] = code_match.group(1)
+            oauth_state["status"] = "pending"
+    def warning(self, msg): pass
+    def error(self, msg):
+        oauth_state["status"] = "error"
+        oauth_state["error"] = msg
+
+
+def start_oauth_flow():
+    with _oauth_lock:
+        if oauth_state["status"] in ("pending", "starting"):
+            return
+        oauth_state.update({"status": "starting", "url": None, "code": None, "error": None})
+
+    def _run():
+        opts = {
+            "username": "oauth2",
+            "password": "",
+            "cachedir": YTDLP_CACHE_DIR,
+            "logger": _OAuthLogger(),
+            "quiet": False,
+            "no_warnings": False,
+        }
+        try:
+            os.makedirs(YTDLP_CACHE_DIR, exist_ok=True)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.extract_info("https://www.youtube.com/watch?v=jNQXAC9IVRw", download=False)
+            oauth_state["status"] = "complete"
+            logger.info("YouTube OAuth authentication complete")
+        except Exception as exc:
+            if oauth_state["status"] not in ("complete",):
+                oauth_state["status"] = "error"
+                oauth_state["error"] = str(exc)
+            logger.error("OAuth flow error: %s", exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _base_ydl_opts() -> dict:
+    opts = {"quiet": True, "no_warnings": True, "cachedir": YTDLP_CACHE_DIR}
+    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        opts["cookiefile"] = COOKIES_FILE
+    return opts
+
+
 def _ydl_opts(channel_id: str) -> dict:
     return {
+        **_base_ydl_opts(),
         "format": "bestaudio/best",
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
@@ -44,8 +110,6 @@ def _ydl_opts(channel_id: str) -> dict:
             "preferredquality": "128",
         }],
         "outtmpl": os.path.join(_audio_dir_for(channel_id), "%(id)s.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
         "extract_flat": False,
         "sleep_interval": 2,
         "max_sleep_interval": 5,
@@ -55,8 +119,7 @@ def _ydl_opts(channel_id: str) -> dict:
 def _fetch_channel_entries(channel_url: str, max_entries: int) -> list[dict]:
     """Return metadata for the most recent max_entries videos without downloading."""
     opts = {
-        "quiet": True,
-        "no_warnings": True,
+        **_base_ydl_opts(),
         "extract_flat": True,
         "playlistend": max_entries,
     }
@@ -178,7 +241,7 @@ def download_single(video_url: str, subscribe: bool = False):
     """Download a specific video URL, bypassing all availability filters."""
     logger.info("Downloading single video: %s", video_url)
     try:
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+        with yt_dlp.YoutubeDL(_base_ydl_opts()) as ydl:
             info = ydl.extract_info(video_url, download=False)
     except Exception as exc:
         logger.error("Failed to fetch video info %s: %s", video_url, exc)

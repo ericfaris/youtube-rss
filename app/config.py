@@ -10,4 +10,6 @@ AUTH_USER = os.environ.get("AUTH_USER", "")
 AUTH_PASS = os.environ.get("AUTH_PASS", "")
 MAX_EPISODES_PER_CHANNEL = int(os.environ.get("MAX_EPISODES_PER_CHANNEL", "20"))
 POLL_INTERVAL_HOURS = int(os.environ.get("POLL_INTERVAL_HOURS", "6"))
+COOKIES_FILE = os.environ.get("COOKIES_FILE", "")
+YTDLP_CACHE_DIR = os.path.join(DATA_DIR, "yt-dlp-cache")
 

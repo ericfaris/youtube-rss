@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import database as db
 from app.config import AUDIO_DIR, AUTH_PASS, AUTH_USER, BASE_URL, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
-from app.downloader import download_single, poll_all, poll_channel, remove_channel_data
+from app.downloader import download_single, is_oauth_authenticated, oauth_state, poll_all, poll_channel, remove_channel_data, start_oauth_flow
 from app.feed import build_feed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -75,6 +75,48 @@ def _feed_url(channel_id: str) -> str:
         netloc = parsed.netloc
     base = urlunparse(parsed._replace(netloc=netloc))
     return f"{base}/feed/{channel_id}.xml"
+
+
+def _render_auth_card() -> str:
+    status = oauth_state["status"]
+    authenticated = is_oauth_authenticated()
+
+    if authenticated and status not in ("pending", "starting", "error"):
+        badge = '<span style="color:#4a7c3f;font-weight:600">&#10003; Authenticated</span>'
+        action = '<form method="post" action="/auth/youtube" style="display:inline"><button class="btn-secondary">Re-authenticate</button></form>'
+        refresh = ""
+    elif status == "pending" and oauth_state["url"]:
+        url = oauth_state["url"]
+        code = oauth_state["code"] or ""
+        badge = '<span style="color:#a06020;font-weight:600">&#9679; Waiting for login&hellip;</span>'
+        action = f'''
+            <p style="margin:12px 0 6px;font-size:0.9rem">
+                1. Visit <a href="{url}" target="_blank" style="color:#36558f">{url}</a><br>
+                2. Enter code <strong style="font-size:1.1rem;letter-spacing:.1em">{code}</strong>
+            </p>'''
+        refresh = '<script>setTimeout(()=>location.reload(),5000)</script>'
+    elif status in ("starting",):
+        badge = '<span style="color:#a06020;font-weight:600">&#9679; Starting&hellip;</span>'
+        action = ""
+        refresh = '<script>setTimeout(()=>location.reload(),3000)</script>'
+    elif status == "error":
+        badge = f'<span style="color:#a03030;font-weight:600">&#10007; Error</span> <span style="font-size:0.8rem;color:#96acb7">{oauth_state["error"] or ""}</span>'
+        action = '<form method="post" action="/auth/youtube" style="display:inline"><button class="btn-secondary">Retry</button></form>'
+        refresh = ""
+    else:
+        badge = '<span style="color:#96acb7">Not authenticated</span>'
+        action = '<form method="post" action="/auth/youtube" style="display:inline"><button class="btn-primary">Authenticate with YouTube</button></form>'
+        refresh = ""
+
+    return f"""
+        <div class="card">
+            <div class="card-header">YouTube Authentication</div>
+            <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+                {badge}
+                {action}
+            </div>
+            {refresh}
+        </div>"""
 
 
 def _render_ui() -> str:
@@ -316,6 +358,8 @@ def _render_ui() -> str:
             </div>
         </div>
 
+        {_render_auth_card()}
+
         <div class="card">
             <div class="card-header">One-off Downloads</div>
             <table>
@@ -398,6 +442,12 @@ def remove_channel(url: str = Form(...)):
     if channel_id:
         db.delete_episodes_for_channel(channel_id)
         remove_channel_data(channel_id)
+    return RedirectResponse("/", status_code=302)
+
+
+@app.post("/auth/youtube")
+def auth_youtube():
+    start_oauth_flow()
     return RedirectResponse("/", status_code=302)
 
 
