@@ -1,15 +1,26 @@
 services:
   app:
-    build: .
+    image: ericfaris/youtube-rss:latest
     ports:
       - "8000:8000"
     volumes:
       - ./data:/data
     environment:
-      - BASE_URL=http://localhost:8000
-      - AUTH_USER=admin
-      - AUTH_PASS=changeme
+      # External URL used in RSS feed links — must be reachable by your podcast app
+      - BASE_URL=http://kingdom.tail7a5b28.ts.net:8000
+
+      # Web UI login credentials (set in .env file)
+      - AUTH_USER=${AUTH_USER}
+      - AUTH_PASS=${AUTH_PASS}
+
+      # How many episodes to keep per channel (older ones are pruned)
       - MAX_EPISODES_PER_CHANNEL=5
+
+      # How often to check channels for new videos (in hours)
       - POLL_INTERVAL_HOURS=2
+
+      # Internal data directory — leave this as-is
       - DATA_DIR=/data
+
+      # Uncomment after uploading cookies via the UI
       # - COOKIES_FILE=/data/cookies.txt

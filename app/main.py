@@ -1,3 +1,4 @@
+import html as _html
 import logging
 import os
 import threading
@@ -130,7 +131,7 @@ def _render_ui() -> str:
         name = ch["channel_name"] or ch["url"]
         episode_count = len(db.get_episodes(channel_id)) if channel_id else 0
         feed_url = _feed_url(channel_id) if channel_id else "—"
-        feed_link = f'<a href="{feed_url}" target="_blank">{feed_url}</a> <button type="button" class="btn-copy" onclick="navigator.clipboard.writeText(\'{feed_url}\').then(()=>{{this.textContent=\'✓\';setTimeout(()=>this.innerHTML=\'&#128203;\',1500)}})">&#128203;</button>' if channel_id else "—"
+        feed_link = f'<a href="{feed_url}" target="_blank">{feed_url}</a> <button type="button" class="btn-copy" data-url="{_html.escape(feed_url, quote=True)}">&#128203;</button>' if channel_id else "—"
         rows += f"""
         <tr>
             <td>{name}</td>
@@ -158,7 +159,7 @@ def _render_ui() -> str:
         name = ch["channel_name"] or channel_id
         episode_count = len(db.get_episodes(channel_id))
         feed_url = _feed_url(channel_id)
-        feed_link = f'<a href="{feed_url}" target="_blank">{feed_url}</a> <button type="button" class="btn-copy" onclick="navigator.clipboard.writeText(\'{feed_url}\').then(()=>{{this.textContent=\'✓\';setTimeout(()=>this.innerHTML=\'&#128203;\',1500)}})">&#128203;</button>'
+        feed_link = f'<a href="{feed_url}" target="_blank">{feed_url}</a> <button type="button" class="btn-copy" data-url="{_html.escape(feed_url, quote=True)}">&#128203;</button>'
         unsub_rows += f"""
         <tr>
             <td>{name}</td>
@@ -400,6 +401,17 @@ def _render_ui() -> str:
         </div>
     </main>
     <div class="version">v{VERSION}</div>
+    <script>
+        document.addEventListener('click', function(e) {{
+            const btn = e.target.closest('.btn-copy');
+            if (!btn) return;
+            const url = btn.dataset.url;
+            navigator.clipboard.writeText(url).then(() => {{
+                btn.textContent = '\u2713';
+                setTimeout(() => btn.innerHTML = '&#128203;', 1500);
+            }});
+        }});
+    </script>
 </body>
 </html>"""
 
