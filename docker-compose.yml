@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - BASE_URL=http://localhost:8000
+      - AUTH_USER=admin
+      - AUTH_PASS=changeme
+      - MAX_EPISODES_PER_CHANNEL=5
+      - POLL_INTERVAL_HOURS=2
+      - DATA_DIR=/data

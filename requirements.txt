@@ -1,0 +1,6 @@
+yt-dlp
+fastapi
+uvicorn[standard]
+apscheduler
+feedgen
+python-multipart
