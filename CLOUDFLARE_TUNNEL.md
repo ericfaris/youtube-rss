@@ -27,7 +27,7 @@ It works by running a small agent (`cloudflared`) on your machine that creates a
 ## Step 1 — Add Your Domain to Cloudflare
 
 1. Log into [cloudflare.com](https://cloudflare.com) and click **Add a Site**
-2. Enter your domain (e.g. `mooseflip.com`) and select the **Free** plan
+2. Enter your domain (e.g. `yourdomain.com`) and select the **Free** plan
 3. Cloudflare will scan your existing DNS records and show you two nameserver addresses, e.g.:
    ```
    ada.ns.cloudflare.com
@@ -62,7 +62,7 @@ cloudflared --version
 cloudflared tunnel login
 ```
 
-This opens a browser window. Log into your Cloudflare account and select your domain (`mooseflip.com`). After authorizing, a certificate file is saved to `~/.cloudflared/cert.pem`. This certificate gives cloudflared permission to create tunnels for your domain.
+This opens a browser window. Log into your Cloudflare account and select your domain (`yourdomain.com`). After authorizing, a certificate file is saved to `~/.cloudflared/cert.pem`. This certificate gives cloudflared permission to create tunnels for your domain.
 
 ---
 
@@ -105,7 +105,7 @@ tunnel: <TUNNEL-ID>
 credentials-file: /etc/cloudflared/<TUNNEL-ID>.json
 
 ingress:
-  - hostname: rss.mooseflip.com
+  - hostname: rss.yourdomain.com
     service: http://localhost:8000
   - service: http_status:404
 ```
@@ -113,7 +113,7 @@ ingress:
 **What this does:**
 - `tunnel` — the name or ID of the tunnel to run
 - `credentials-file` — path to the credentials JSON (identifies this machine to Cloudflare)
-- `ingress` — routing rules: requests to `rss.mooseflip.com` are forwarded to `http://localhost:8000` on your machine; anything else returns a 404
+- `ingress` — routing rules: requests to `rss.yourdomain.com` are forwarded to `http://localhost:8000` on your machine; anything else returns a 404
 - The last `service: http_status:404` is required as a catch-all rule
 
 ---
@@ -131,13 +131,13 @@ sudo chmod 644 /etc/cloudflared/<TUNNEL-ID>.json
 
 ## Step 7 — Create the DNS Record
 
-Tell Cloudflare to route `rss.mooseflip.com` to your tunnel:
+Tell Cloudflare to route `rss.yourdomain.com` to your tunnel:
 
 ```bash
-cloudflared tunnel route dns youtube-rss rss.mooseflip.com
+cloudflared tunnel route dns youtube-rss rss.yourdomain.com
 ```
 
-This creates a `CNAME` record in your Cloudflare DNS pointing `rss.mooseflip.com` to `<TUNNEL-ID>.cfargotunnel.com`. You can verify it in the Cloudflare dashboard under **DNS**.
+This creates a `CNAME` record in your Cloudflare DNS pointing `rss.yourdomain.com` to `<TUNNEL-ID>.cfargotunnel.com`. You can verify it in the Cloudflare dashboard under **DNS**.
 
 ---
 
@@ -149,7 +149,7 @@ Before installing as a service, test that it works:
 cloudflared tunnel --config /etc/cloudflared/config.yml run youtube-rss
 ```
 
-Leave this running and open `https://rss.mooseflip.com` in a browser. You should see the management UI login prompt. If it works, hit `Ctrl+C` to stop it.
+Leave this running and open `https://rss.yourdomain.com` in a browser. You should see the management UI login prompt. If it works, hit `Ctrl+C` to stop it.
 
 ---
 
@@ -178,7 +178,7 @@ You should see `Active: active (running)` and log lines showing registered tunne
 Update `BASE_URL` in your `docker-compose.yml` to the public URL:
 
 ```yaml
-- BASE_URL=https://rss.mooseflip.com
+- BASE_URL=https://rss.yourdomain.com
 ```
 
 Restart the container:
@@ -193,8 +193,8 @@ Feed URLs shown in the management UI will now use the public domain, which is wh
 
 ## How to Verify Everything Is Working
 
-1. **Management UI** — open `https://rss.mooseflip.com` in a browser. You should see a login prompt.
-2. **Feed** — open `https://rss.mooseflip.com/feed/<channel_id>.xml` — you should see RSS XML without being prompted for a password (feeds are public).
+1. **Management UI** — open `https://rss.yourdomain.com` in a browser. You should see a login prompt.
+2. **Feed** — open `https://rss.yourdomain.com/feed/<channel_id>.xml` — you should see RSS XML without being prompted for a password (feeds are public).
 3. **Pocket Casts** — add the feed URL in the Pocket Casts mobile app. It should find the podcast immediately.
 
 ---
@@ -242,7 +242,7 @@ If you lose your machine and need to set this up again on a new one:
 5. Place the credentials JSON in `/etc/cloudflared/`
 6. Recreate `config.yml` using the tunnel ID (Step 5)
 7. Install the service (Step 9)
-8. The DNS record (`rss.mooseflip.com → CNAME → <tunnel-id>.cfargotunnel.com`) already exists in Cloudflare — no changes needed there unless you deleted and recreated the tunnel
+8. The DNS record (`rss.yourdomain.com → CNAME → <tunnel-id>.cfargotunnel.com`) already exists in Cloudflare — no changes needed there unless you deleted and recreated the tunnel
 
 ---
 
