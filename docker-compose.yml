@@ -1,13 +1,15 @@
 services:
   app:
+    build: .
     image: ericfaris/youtube-rss:latest
+    restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
       - ./data:/data
     environment:
       # External URL used in RSS feed links — must be reachable by your podcast app
-      - BASE_URL=http://kingdom.tail7a5b28.ts.net:8000
+      - BASE_URL=https://rss.mooseflip.com
 
       # Web UI login credentials (set in .env file)
       - AUTH_USER=${AUTH_USER}

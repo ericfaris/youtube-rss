@@ -194,7 +194,7 @@ Subscribe to feed URLs in any podcast app (Pocket Casts, AntennaPod, Overcast, A
 1. **Polling** — on startup and every `POLL_INTERVAL_HOURS`, yt-dlp fetches the `/videos` tab of each subscribed channel
 2. **Filtering** — member-only, subscriber-only, and premium videos are skipped during automatic polls
 3. **Downloading** — new videos are downloaded as MP3 (128kbps) to `DATA_DIR/audio/<channel_id>/`
-4. **Thumbnails** — channel cover art and per-episode thumbnails are saved to `DATA_DIR/thumbnails/<channel_id>/`
+4. **Thumbnails** — channel cover art and per-episode thumbnails are downloaded and converted to JPEG (YouTube often serves WebP; ffmpeg converts them for podcast app compatibility)
 5. **Pruning** — once a channel exceeds `MAX_EPISODES_PER_CHANNEL`, the oldest episodes are deleted
 6. **Feed generation** — RSS feeds are built dynamically from the SQLite database on each request
 7. **Deduplication** — already-downloaded files are skipped by file existence check

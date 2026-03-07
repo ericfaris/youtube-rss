@@ -1,8 +1,9 @@
+import os
 from datetime import datetime, timezone
 from feedgen.feed import FeedGenerator
 
 from app import database as db
-from app.config import BASE_URL
+from app.config import BASE_URL, THUMBNAIL_DIR
 
 
 def build_feed(channel_id: str) -> bytes:
@@ -25,7 +26,18 @@ def build_feed(channel_id: str) -> bytes:
     fg.podcast.itunes_author(channel_name)
     fg.podcast.itunes_explicit("no")
     fg.podcast.itunes_category("Technology")
-    fg.podcast.itunes_image(f"{BASE_URL}/thumbnails/{channel_id}/channel.jpg")
+    channel_jpg = os.path.join(THUMBNAIL_DIR, channel_id, "channel.jpg")
+    if os.path.exists(channel_jpg):
+        channel_image_url = f"{BASE_URL}/thumbnails/{channel_id}/channel.jpg"
+    else:
+        # fall back to first episode thumbnail that exists
+        channel_image_url = next(
+            (f"{BASE_URL}/thumbnails/{channel_id}/{ep['thumbnail']}"
+             for ep in episodes if ep.get("thumbnail")),
+            None,
+        )
+    if channel_image_url:
+        fg.podcast.itunes_image(channel_image_url)
 
     for ep in episodes:
         fe = fg.add_entry()

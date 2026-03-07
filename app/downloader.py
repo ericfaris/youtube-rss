@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -15,11 +16,21 @@ logger = logging.getLogger(__name__)
 def _download_thumbnail(url: str, dest: str) -> bool:
     if os.path.exists(dest):
         return True
+    tmp = dest + ".tmp"
     try:
-        urllib.request.urlretrieve(url, dest)
-        return True
+        urllib.request.urlretrieve(url, tmp)
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", tmp, dest],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            logger.warning("ffmpeg thumbnail conversion failed for %s: %s", url, result.stderr.decode())
+        os.remove(tmp)
+        return os.path.exists(dest)
     except Exception as exc:
         logger.warning("Failed to download thumbnail %s: %s", url, exc)
+        if os.path.exists(tmp):
+            os.remove(tmp)
         return False
 
 
@@ -85,6 +96,13 @@ def _fetch_channel_entries(channel_url: str, max_entries: int) -> list[dict]:
 
     # download channel cover art
     channel_thumb_url = info.get("thumbnail")
+    if not channel_thumb_url:
+        # extract_flat often omits thumbnail; try thumbnails list (highest res last)
+        thumbnails = info.get("thumbnails") or []
+        for t in reversed(thumbnails):
+            if t.get("url"):
+                channel_thumb_url = t["url"]
+                break
     if channel_thumb_url:
         dest = os.path.join(_thumbnail_dir_for(channel_id), "channel.jpg")
         _download_thumbnail(channel_thumb_url, dest)
