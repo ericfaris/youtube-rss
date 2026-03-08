@@ -4,7 +4,7 @@ services:
     image: ericfaris/youtube-rss:latest
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/data
     environment:
@@ -16,7 +16,7 @@ services:
       - AUTH_PASS=${AUTH_PASS}
 
       # How many episodes to keep per channel (older ones are pruned)
-      - MAX_EPISODES_PER_CHANNEL=5
+      - MAX_EPISODES_PER_CHANNEL=20
 
       # How often to check channels for new videos (in hours)
       - POLL_INTERVAL_HOURS=2

@@ -4,6 +4,8 @@ import logging
 import os
 import secrets
 import threading
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -34,6 +36,12 @@ VERSION = _get_version()
 # Paths that podcast apps access — no auth required
 _PUBLIC_PREFIXES = ("/feed/", "/audio/", "/thumbnails/", "/health")
 
+# Rate limiting: max failed auth attempts per IP within the window
+_RATE_LIMIT_MAX = 10
+_RATE_LIMIT_WINDOW = 60  # seconds
+_failed_attempts: dict[str, list[float]] = defaultdict(list)
+_rate_limit_lock = threading.Lock()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,6 +49,7 @@ async def lifespan(app: FastAPI):
 
     scheduler = BackgroundScheduler()
     scheduler.add_job(poll_all, "interval", hours=POLL_INTERVAL_HOURS)
+    scheduler.add_job(_prune_rate_limit_table, "interval", hours=1)
     scheduler.start()
 
     channels = db.get_channels()
@@ -58,12 +67,58 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="YouTube RSS", lifespan=lifespan)
 
 
+def _client_ip(request: Request) -> str:
+    """Return the real client IP, accounting for Cloudflare and other proxies."""
+    for header in ("CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"):
+        value = request.headers.get(header)
+        if value:
+            return value.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """Return True if the IP is rate-limited (too many recent failures)."""
+    now = time.monotonic()
+    with _rate_limit_lock:
+        _failed_attempts[ip] = [t for t in _failed_attempts[ip] if now - t < _RATE_LIMIT_WINDOW]
+        return len(_failed_attempts[ip]) >= _RATE_LIMIT_MAX
+
+
+def _record_failure(ip: str):
+    now = time.monotonic()
+    with _rate_limit_lock:
+        _failed_attempts[ip].append(now)
+    logger.warning("Failed auth attempt from %s", ip)
+
+
+def _clear_failures(ip: str):
+    with _rate_limit_lock:
+        _failed_attempts.pop(ip, None)
+
+
+def _prune_rate_limit_table():
+    """Remove IPs with no recent failures to prevent unbounded memory growth."""
+    now = time.monotonic()
+    with _rate_limit_lock:
+        stale = [ip for ip, attempts in _failed_attempts.items()
+                 if all(now - t >= _RATE_LIMIT_WINDOW for t in attempts)]
+        for ip in stale:
+            del _failed_attempts[ip]
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     if not AUTH_USER and not AUTH_PASS:
         return await call_next(request)
     if request.url.path.startswith(_PUBLIC_PREFIXES):
         return await call_next(request)
+
+    ip = _client_ip(request)
+
+    if _check_rate_limit(ip):
+        logger.warning("Rate-limited auth attempt from %s", ip)
+        return Response(status_code=429, content="Too many failed login attempts. Try again later.")
+
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Basic "):
         try:
@@ -71,9 +126,11 @@ async def auth_middleware(request: Request, call_next):
             username, password = decoded.split(":", 1)
             if (secrets.compare_digest(username.encode(), AUTH_USER.encode()) and
                     secrets.compare_digest(password.encode(), AUTH_PASS.encode())):
+                _clear_failures(ip)
                 return await call_next(request)
         except Exception:
             pass
+    _record_failure(ip)
     return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="YouTube RSS"'})
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
@@ -130,22 +187,24 @@ def _render_ui() -> str:
     for ch in channels:
         channel_id = ch["channel_id"]
         name = ch["channel_name"] or ch["url"]
+        name_escaped = _html.escape(name)
+        url_escaped = _html.escape(ch["url"], quote=True)
         episode_count = len(db.get_episodes(channel_id)) if channel_id else 0
         feed_url = _feed_url(channel_id) if channel_id else "—"
         feed_link = f'<a href="{feed_url}" target="_blank">{feed_url}</a> <button type="button" class="btn-copy" data-url="{_html.escape(feed_url, quote=True)}">&#128203;</button>' if channel_id else "—"
         rows += f"""
         <tr>
-            <td>{name}</td>
+            <td>{name_escaped}</td>
             <td>{episode_count}</td>
             <td class="feed-url">{feed_link}</td>
             <td>
                 <form method="post" action="/channels/poll" style="display:inline">
-                    <input type="hidden" name="url" value="{ch['url']}">
+                    <input type="hidden" name="url" value="{url_escaped}">
                     <button class="btn-secondary">Poll Now</button>
                 </form>
                 <form method="post" action="/channels/remove" style="display:inline"
-                      onsubmit="return confirm('Remove {name}?')">
-                    <input type="hidden" name="url" value="{ch['url']}">
+                      onsubmit="return confirm('Remove {name_escaped}?')">
+                    <input type="hidden" name="url" value="{url_escaped}">
                     <button class="btn-danger">Remove</button>
                 </form>
             </td>
@@ -158,18 +217,20 @@ def _render_ui() -> str:
     for ch in unsubscribed:
         channel_id = ch["channel_id"]
         name = ch["channel_name"] or channel_id
+        name_escaped = _html.escape(name)
+        channel_id_escaped = _html.escape(channel_id, quote=True)
         episode_count = len(db.get_episodes(channel_id))
         feed_url = _feed_url(channel_id)
         feed_link = f'<a href="{feed_url}" target="_blank">{feed_url}</a> <button type="button" class="btn-copy" data-url="{_html.escape(feed_url, quote=True)}">&#128203;</button>'
         unsub_rows += f"""
         <tr>
-            <td>{name}</td>
+            <td>{name_escaped}</td>
             <td>{episode_count}</td>
             <td class="feed-url">{feed_link}</td>
             <td>
                 <form method="post" action="/channels/subscribe" style="display:inline">
-                    <input type="hidden" name="channel_id" value="{channel_id}">
-                    <input type="hidden" name="channel_name" value="{name}">
+                    <input type="hidden" name="channel_id" value="{channel_id_escaped}">
+                    <input type="hidden" name="channel_name" value="{name_escaped}">
                     <button class="btn-secondary">Subscribe</button>
                 </form>
             </td>
