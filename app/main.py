@@ -1,12 +1,15 @@
 import base64
 import html as _html
+import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -41,6 +44,8 @@ _RATE_LIMIT_MAX = 10
 _RATE_LIMIT_WINDOW = 60  # seconds
 _failed_attempts: dict[str, list[float]] = defaultdict(list)
 _rate_limit_lock = threading.Lock()
+_CHANNEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MAX_COOKIE_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 @asynccontextmanager
@@ -106,11 +111,25 @@ def _prune_rate_limit_table():
             del _failed_attempts[ip]
 
 
+def _csrf_origin_ok(request: Request) -> bool:
+    """Return True if Origin/Referer matches Host, mitigating CSRF on POST requests."""
+    host = request.headers.get("Host", "")
+    for header in ("Origin", "Referer"):
+        value = request.headers.get(header, "")
+        if value and value != "null":
+            return urlparse(value).netloc == host
+    return True  # no Origin/Referer — allow direct/non-browser clients
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    is_public = request.url.path.startswith(_PUBLIC_PREFIXES)
     if not AUTH_USER and not AUTH_PASS:
+        if not is_public and request.method == "POST" and not _csrf_origin_ok(request):
+            return Response(status_code=403, content="CSRF check failed")
         return await call_next(request)
-    if request.url.path.startswith(_PUBLIC_PREFIXES):
+
+    if is_public:
         return await call_next(request)
 
     ip = _client_ip(request)
@@ -127,6 +146,8 @@ async def auth_middleware(request: Request, call_next):
             if (secrets.compare_digest(username.encode(), AUTH_USER.encode()) and
                     secrets.compare_digest(password.encode(), AUTH_PASS.encode())):
                 _clear_failures(ip)
+                if request.method == "POST" and not _csrf_origin_ok(request):
+                    return Response(status_code=403, content="CSRF check failed")
                 return await call_next(request)
         except Exception:
             pass
@@ -187,7 +208,7 @@ def _render_ui() -> str:
     for ch in channels:
         channel_id = ch["channel_id"]
         name = ch["channel_name"] or ch["url"]
-        name_escaped = _html.escape(name)
+        name_escaped = _html.escape(name, quote=True)
         url_escaped = _html.escape(ch["url"], quote=True)
         episode_count = len(db.get_episodes(channel_id)) if channel_id else 0
         feed_url = _feed_url(channel_id) if channel_id else "—"
@@ -203,7 +224,7 @@ def _render_ui() -> str:
                     <button class="btn-secondary">Poll Now</button>
                 </form>
                 <form method="post" action="/channels/remove" style="display:inline"
-                      onsubmit="return confirm('Remove {name_escaped}?')">
+                      onsubmit="return confirm({_html.escape(json.dumps(f'Remove {name}?'), quote=True)})"  >
                     <input type="hidden" name="url" value="{url_escaped}">
                     <button class="btn-danger">Remove</button>
                 </form>
@@ -217,7 +238,7 @@ def _render_ui() -> str:
     for ch in unsubscribed:
         channel_id = ch["channel_id"]
         name = ch["channel_name"] or channel_id
-        name_escaped = _html.escape(name)
+        name_escaped = _html.escape(name, quote=True)
         channel_id_escaped = _html.escape(channel_id, quote=True)
         episode_count = len(db.get_episodes(channel_id))
         feed_url = _feed_url(channel_id)
@@ -497,7 +518,10 @@ def _render_ui() -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return _render_ui()
+    return HTMLResponse(
+        content=_render_ui(),
+        headers={"Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"},
+    )
 
 
 @app.get("/download")
@@ -530,6 +554,8 @@ def add_channel(url: str = Form(...)):
 
 @app.post("/channels/subscribe")
 def subscribe_channel(channel_id: str = Form(...), channel_name: str = Form(...)):
+    if not _CHANNEL_ID_RE.match(channel_id):
+        raise HTTPException(status_code=400, detail="Invalid channel ID")
     channel_page_url = f"https://www.youtube.com/channel/{channel_id}"
     db.add_channel(channel_page_url)
     db.update_channel_meta(channel_page_url, channel_id, channel_name)
@@ -553,8 +579,10 @@ def remove_channel(url: str = Form(...)):
 async def upload_cookies(file: UploadFile = File(...)):
     if not COOKIES_FILE:
         raise HTTPException(status_code=500, detail="COOKIES_FILE env var not set")
+    content = await file.read(_MAX_COOKIE_BYTES + 1)
+    if len(content) > _MAX_COOKIE_BYTES:
+        raise HTTPException(status_code=413, detail="Cookie file too large (max 5 MB)")
     os.makedirs(os.path.dirname(COOKIES_FILE), exist_ok=True)
-    content = await file.read()
     with open(COOKIES_FILE, "wb") as f:
         f.write(content)
     logger.info("Cookies file updated (%d bytes)", len(content))

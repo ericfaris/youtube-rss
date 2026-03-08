@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import subprocess
 import time
 import urllib.request
@@ -9,6 +10,8 @@ import yt_dlp
 
 from app import database as db
 from app.config import AUDIO_DIR, COOKIES_FILE, MAX_EPISODES_PER_CHANNEL, THUMBNAIL_DIR
+
+_CHANNEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +38,16 @@ def _download_thumbnail(url: str, dest: str) -> bool:
 
 
 def _thumbnail_dir_for(channel_id: str) -> str:
+    if not _CHANNEL_ID_RE.match(channel_id):
+        raise ValueError(f"Invalid channel_id: {channel_id!r}")
     path = os.path.join(THUMBNAIL_DIR, channel_id)
     os.makedirs(path, exist_ok=True)
     return path
 
 
 def _audio_dir_for(channel_id: str) -> str:
+    if not _CHANNEL_ID_RE.match(channel_id):
+        raise ValueError(f"Invalid channel_id: {channel_id!r}")
     path = os.path.join(AUDIO_DIR, channel_id)
     os.makedirs(path, exist_ok=True)
     return path
@@ -248,6 +255,9 @@ def download_single(video_url: str, subscribe: bool = False):
 def remove_channel_data(channel_id: str):
     """Delete all downloaded files for a channel."""
     import shutil
+    if not _CHANNEL_ID_RE.match(channel_id):
+        logger.error("Refusing to delete data for suspicious channel_id: %r", channel_id)
+        return
     audio_dir = os.path.join(AUDIO_DIR, channel_id)
     thumb_dir = os.path.join(THUMBNAIL_DIR, channel_id)
     for path in (audio_dir, thumb_dir):
