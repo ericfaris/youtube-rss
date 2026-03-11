@@ -13,6 +13,7 @@ A self-hosted server that turns YouTube channels into podcast RSS feeds. Subscri
 - **Member content filtering** — skips subscriber-only videos during automatic polls
 - **Persistent storage** — SQLite database + audio files survive container restarts
 - **Basic auth** — management UI is password protected; feeds and audio are publicly accessible
+- **Security hardening** — CSRF protection on all POST endpoints, Content-Security-Policy header, rate limiting on failed auth attempts, path traversal prevention
 
 ---
 
@@ -27,7 +28,7 @@ services:
   app:
     image: ericfaris/youtube-rss:latest
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/data
     environment:
@@ -39,7 +40,7 @@ services:
       - AUTH_PASS=${AUTH_PASS}
 
       # How many episodes to keep per channel (older ones are pruned)
-      - MAX_EPISODES_PER_CHANNEL=5
+      - MAX_EPISODES_PER_CHANNEL=20
 
       # How often to check channels for new videos (in hours)
       - POLL_INTERVAL_HOURS=2
@@ -78,12 +79,13 @@ All configuration is via environment variables in `docker-compose.yml`. Credenti
 | `AUTH_USER` | *(none)* | Management UI username |
 | `AUTH_PASS` | *(none)* | Management UI password |
 | `DATA_DIR` | `/data` | Where audio, thumbnails, and the database are stored |
-| `MAX_EPISODES_PER_CHANNEL` | `5` | How many episodes to keep per channel |
+| `MAX_EPISODES_PER_CHANNEL` | `20` | How many episodes to keep per channel |
 | `POLL_INTERVAL_HOURS` | `2` | How often to check subscribed channels for new videos |
 | `COOKIES_FILE` | *(none)* | Path to YouTube cookies file (upload via UI, then uncomment) |
 
 ### Important notes
 - `BASE_URL` must be reachable by your podcast app. If using Pocket Casts or another server-side app, this must be a public URL. See [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md) for how to expose the app publicly using Cloudflare Tunnel.
+- The port is bound to `127.0.0.1` so the app is only reachable from localhost — external traffic must go through a reverse proxy or tunnel (e.g. Cloudflare Tunnel or Tailscale).
 - The management UI (`/`) requires Basic Auth. Feed and audio endpoints (`/feed/`, `/audio/`) are public so podcast apps can access them without credentials.
 - YouTube cookies expire every few weeks. When downloads start failing, re-upload cookies via the management UI and uncomment `COOKIES_FILE`.
 
@@ -185,7 +187,7 @@ Subscribe to feed URLs in any podcast app (Pocket Casts, AntennaPod, Overcast, A
 | `POST` | `/channels/poll` | Required | Trigger immediate poll (form) |
 | `POST` | `/channels/subscribe` | Required | Promote one-off to subscription (form) |
 | `POST` | `/episodes/download` | Required | Download a specific episode (form) |
-| `POST` | `/cookies/upload` | Required | Upload YouTube cookies file |
+| `POST` | `/auth/cookies` | Required | Upload YouTube cookies file (max 5 MB) |
 
 ---
 

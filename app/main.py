@@ -36,6 +36,8 @@ def _get_version() -> str:
 
 VERSION = _get_version()
 
+_scheduler: BackgroundScheduler | None = None
+
 # Paths that podcast apps access — no auth required
 _PUBLIC_PREFIXES = ("/feed/", "/audio/", "/thumbnails/", "/health")
 
@@ -50,12 +52,13 @@ _MAX_COOKIE_BYTES = 5 * 1024 * 1024  # 5 MB
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _scheduler
     db.init_db()
 
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(poll_all, "interval", hours=POLL_INTERVAL_HOURS)
-    scheduler.add_job(_prune_rate_limit_table, "interval", hours=1)
-    scheduler.start()
+    _scheduler = BackgroundScheduler()
+    _scheduler.add_job(poll_all, "interval", hours=POLL_INTERVAL_HOURS)
+    _scheduler.add_job(_prune_rate_limit_table, "interval", hours=1)
+    _scheduler.start()
 
     channels = db.get_channels()
     if channels:
@@ -66,7 +69,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    scheduler.shutdown()
+    _scheduler.shutdown()
 
 
 app = FastAPI(title="YouTube RSS", lifespan=lifespan)
@@ -164,6 +167,26 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 # ---------------------------------------------------------------------------
 # Management UI
 # ---------------------------------------------------------------------------
+
+def _next_poll_label() -> str:
+    """Return a human-readable 'next poll in X' string, or empty string if unknown."""
+    if _scheduler is None:
+        return ""
+    for job in _scheduler.get_jobs():
+        if job.func is poll_all and job.next_run_time:
+            import datetime
+            now = datetime.datetime.now(datetime.timezone.utc)
+            delta = job.next_run_time - now
+            total = int(delta.total_seconds())
+            if total <= 0:
+                return "polling now"
+            h, rem = divmod(total, 3600)
+            m = rem // 60
+            if h:
+                return f"next poll in {h}h {m:02d}m"
+            return f"next poll in {m}m"
+    return ""
+
 
 def _feed_url(channel_id: str) -> str:
     return f"{BASE_URL}/feed/{channel_id}.xml"
@@ -433,7 +456,10 @@ def _render_ui() -> str:
     </header>
     <main>
         <div class="card">
-            <div class="card-header">Subscribed Channels</div>
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <span>Subscribed Channels</span>
+                <span style="font-size:0.75rem;font-weight:400;opacity:0.8">{_next_poll_label()}</span>
+            </div>
             <table>
                 <thead>
                     <tr>
