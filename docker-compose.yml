@@ -12,8 +12,11 @@ services:
       - BASE_URL=https://rss.mooseflip.com
 
       # Web UI login credentials (set in .env file)
-      - AUTH_USER=${AUTH_USER}
-      - AUTH_PASS=${AUTH_PASS}
+      # Multi-user: AUTH_USERS=alice:pass1,bob:pass2 (takes precedence)
+      - AUTH_USERS=${AUTH_USERS:-}
+      # Single-user fallback (used if AUTH_USERS is not set)
+      - AUTH_USER=${AUTH_USER:-}
+      - AUTH_PASS=${AUTH_PASS:-}
 
       # How many episodes to keep per channel (older ones are pruned)
       - MAX_EPISODES_PER_CHANNEL=20

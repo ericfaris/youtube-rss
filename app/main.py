@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import database as db
-from app.config import AUDIO_DIR, AUTH_PASS, AUTH_USER, BASE_URL, COOKIES_FILE, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
+from app.config import AUDIO_DIR, AUTH_CREDENTIALS, BASE_URL, COOKIES_FILE, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
 from app.downloader import cookies_status, download_single, poll_all, poll_channel, remove_channel_data
 from app.feed import build_feed
 
@@ -127,7 +127,7 @@ def _csrf_origin_ok(request: Request) -> bool:
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     is_public = request.url.path.startswith(_PUBLIC_PREFIXES)
-    if not AUTH_USER and not AUTH_PASS:
+    if not AUTH_CREDENTIALS:
         if not is_public and request.method == "POST" and not _csrf_origin_ok(request):
             return Response(status_code=403, content="CSRF check failed")
         return await call_next(request)
@@ -146,8 +146,11 @@ async def auth_middleware(request: Request, call_next):
         try:
             decoded = base64.b64decode(auth_header[6:]).decode()
             username, password = decoded.split(":", 1)
-            if (secrets.compare_digest(username.encode(), AUTH_USER.encode()) and
-                    secrets.compare_digest(password.encode(), AUTH_PASS.encode())):
+            if any(
+                secrets.compare_digest(username.encode(), u.encode()) and
+                secrets.compare_digest(password.encode(), p.encode())
+                for u, p in AUTH_CREDENTIALS
+            ):
                 _clear_failures(ip)
                 if request.method == "POST" and not _csrf_origin_ok(request):
                     return Response(status_code=403, content="CSRF check failed")
