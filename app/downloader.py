@@ -110,7 +110,10 @@ def cookies_status() -> dict:
 
 
 def _base_ydl_opts() -> dict:
-    opts = {"quiet": True, "no_warnings": True}
+    # yt-dlp's default JS runtime is "deno"; we ship Node 22 instead (see
+    # Dockerfile) for the YouTube n-challenge solver. Without this, format
+    # selection fails with "Requested format is not available".
+    opts = {"quiet": True, "no_warnings": True, "js_runtimes": {"node": {}}}
     if valid_cookie_file(COOKIES_FILE):
         opts["cookiefile"] = COOKIES_FILE
         logger.info("Using cookies file: %s (%d bytes)", COOKIES_FILE, os.path.getsize(COOKIES_FILE))
