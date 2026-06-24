@@ -9,9 +9,28 @@ from datetime import datetime, timezone
 import yt_dlp
 
 from app import database as db
+from app import notify
 from app.config import AUDIO_DIR, COOKIES_FILE, MAX_EPISODES_PER_CHANNEL, THUMBNAIL_DIR
 
 _CHANNEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# Error fragments that indicate YouTube is rejecting us for lack of valid cookies.
+_AUTH_ERROR_SIGNALS = (
+    "sign in to confirm",
+    "not a bot",
+    "confirm you're not a bot",
+    "this video is available to this channel's members",
+    "use --cookies",
+    "cookies",
+    "login required",
+    "account cookies",
+    "consent",
+)
+
+
+def _looks_like_auth_error(message: str) -> bool:
+    m = (message or "").lower()
+    return any(sig in m for sig in _AUTH_ERROR_SIGNALS)
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +72,37 @@ def _audio_dir_for(channel_id: str) -> str:
     return path
 
 
+_NETSCAPE_HEADERS = ("# Netscape HTTP Cookie File", "# HTTP Cookie File")
+
+
+def valid_cookie_file(path: str) -> bool:
+    """Return True if path is a non-empty, Netscape-format cookies file.
+
+    yt-dlp rejects empty or malformed cookie files with a hard error that
+    aborts the whole extraction, so we validate before handing one over.
+    A valid file either starts with the Netscape header comment or contains
+    at least one tab-separated cookie line with the expected 7 fields.
+    """
+    try:
+        if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
+            return False
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith(_NETSCAPE_HEADERS):
+                    return True
+                if stripped and not stripped.startswith("#"):
+                    # data line: domain, flag, path, secure, expiry, name, value
+                    if len(line.rstrip("\n").split("\t")) >= 7:
+                        return True
+    except OSError as exc:
+        logger.warning("Could not read cookies file %s: %s", path, exc)
+    return False
+
+
 def cookies_status() -> dict:
     """Return info about the current cookies file."""
-    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+    if valid_cookie_file(COOKIES_FILE):
         mtime = os.path.getmtime(COOKIES_FILE)
         updated = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         return {"present": True, "updated": updated}
@@ -64,9 +111,14 @@ def cookies_status() -> dict:
 
 def _base_ydl_opts() -> dict:
     opts = {"quiet": True, "no_warnings": True}
-    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+    if valid_cookie_file(COOKIES_FILE):
         opts["cookiefile"] = COOKIES_FILE
         logger.info("Using cookies file: %s (%d bytes)", COOKIES_FILE, os.path.getsize(COOKIES_FILE))
+    elif COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        logger.warning(
+            "Cookies file %s is empty or not in Netscape format — ignoring it; "
+            "downloads may fail or be rate-limited", COOKIES_FILE,
+        )
     else:
         logger.warning("No cookies file found at %s — downloads may fail", COOKIES_FILE)
     return opts
@@ -190,6 +242,8 @@ def poll_channel(channel_url: str):
         entries, channel_id, channel_name = _fetch_channel_entries(channel_url, MAX_EPISODES_PER_CHANNEL * 3)
     except Exception as exc:
         logger.error("Failed to fetch channel %s: %s", channel_url, exc)
+        if not valid_cookie_file(COOKIES_FILE) or _looks_like_auth_error(str(exc)):
+            notify.send_cookie_alert()
         return
     db.update_channel_meta(original_url, channel_id, channel_name)
 
@@ -211,6 +265,9 @@ def poll_channel(channel_url: str):
 
 
 def poll_all():
+    if not valid_cookie_file(COOKIES_FILE):
+        logger.warning("Cookies file missing/invalid at poll time — alerting")
+        notify.send_cookie_alert()
     channels = db.get_channels()
     for ch in channels:
         poll_channel(ch["url"])

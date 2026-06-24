@@ -17,22 +17,30 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import database as db
-from app.config import AUDIO_DIR, AUTH_CREDENTIALS, BASE_URL, COOKIES_FILE, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
-from app.downloader import cookies_status, download_single, poll_all, poll_channel, remove_channel_data
+from app import notify
+from app.config import AUDIO_DIR, ALERT_EMAIL, AUTH_CREDENTIALS, BASE_URL, COOKIES_FILE, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
+from app.downloader import cookies_status, download_single, poll_all, poll_channel, remove_channel_data, valid_cookie_file
 from app.feed import build_feed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 def _get_version() -> str:
+    # Static package version is the source of truth (works inside Docker where
+    # there's no git history). Append the short git sha when available locally.
+    from app import __version__
+    version = __version__
     try:
         import subprocess
-        return subprocess.check_output(
-            ["git", "describe", "--tags", "--abbrev=0"],
-            stderr=subprocess.DEVNULL
-        ).decode().strip().lstrip("v")
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        if sha:
+            version = f"{version}+{sha}"
     except Exception:
-        return "unknown"
+        pass
+    return version
 
 VERSION = _get_version()
 
@@ -202,6 +210,19 @@ def _render_auth_card() -> str:
     else:
         badge = '<span style="color:#a03030;font-weight:600">&#10007; No cookies</span> <span style="font-size:0.8rem;color:#96acb7">YouTube may block downloads</span>'
 
+    if notify._smtp_configured():
+        email_badge = (
+            f'<span style="font-size:0.8rem;color:#96acb7">&#9993; Alerts on &mdash; '
+            f'{_html.escape(ALERT_EMAIL)}</span>'
+        )
+        email_btn_attr = ""
+    else:
+        email_badge = (
+            '<span style="font-size:0.8rem;color:#96acb7">&#9993; Email alerts not configured '
+            '(set SMTP_* in .env)</span>'
+        )
+        email_btn_attr = " disabled"
+
     return f"""
         <div class="card">
             <div class="card-header">YouTube Cookies</div>
@@ -214,6 +235,12 @@ def _render_auth_card() -> str:
                            style="flex:1;min-width:200px;padding:8px;border:1px solid #d4e4bc;border-radius:6px;background:#f8fbf5;font-size:0.85rem">
                     <button type="submit" class="btn-primary">Upload cookies.txt</button>
                 </form>
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
+                    {email_badge}
+                    <form method="post" action="/auth/test-email" style="margin:0">
+                        <button type="submit" class="btn-secondary"{email_btn_attr}>Send test email</button>
+                    </form>
+                </div>
                 <details style="margin-top:14px">
                     <summary style="font-size:0.82rem;color:#36558f;cursor:pointer;user-select:none">How to export cookies.txt</summary>
                     <ol style="margin:10px 0 0 18px;font-size:0.82rem;color:#1a2335;line-height:1.9">
@@ -612,10 +639,32 @@ async def upload_cookies(file: UploadFile = File(...)):
     if len(content) > _MAX_COOKIE_BYTES:
         raise HTTPException(status_code=413, detail="Cookie file too large (max 5 MB)")
     os.makedirs(os.path.dirname(COOKIES_FILE), exist_ok=True)
-    with open(COOKIES_FILE, "wb") as f:
+    # Validate before overwriting the existing (possibly working) file so a
+    # bad upload can't silently break every channel poll.
+    tmp_path = COOKIES_FILE + ".upload"
+    with open(tmp_path, "wb") as f:
         f.write(content)
+    if not valid_cookie_file(tmp_path):
+        os.remove(tmp_path)
+        raise HTTPException(
+            status_code=400,
+            detail="Not a valid Netscape-format cookies.txt (file is empty or malformed).",
+        )
+    os.replace(tmp_path, COOKIES_FILE)
     logger.info("Cookies file updated (%d bytes)", len(content))
     return RedirectResponse("/", status_code=302)
+
+
+@app.post("/auth/test-email")
+def test_email():
+    if not notify._smtp_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Email alerts not configured — set SMTP_HOST/SMTP_USER/SMTP_PASS in .env",
+        )
+    if notify.send_cookie_alert(force=True):
+        return RedirectResponse("/?email=sent", status_code=302)
+    raise HTTPException(status_code=502, detail="Failed to send test email — check server logs")
 
 
 @app.post("/channels/poll")
@@ -638,4 +687,4 @@ def get_feed(channel_id: str):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": VERSION}

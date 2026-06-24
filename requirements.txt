@@ -1,6 +1,7 @@
-yt-dlp
-fastapi
-uvicorn[standard]
-apscheduler
-feedgen
-python-multipart
+# yt-dlp pinned as a floor (not exact) so rebuilds pick up YouTube fixes.
+yt-dlp>=2026.6.9
+fastapi==0.138.0
+uvicorn[standard]==0.49.0
+apscheduler==3.11.2
+feedgen==1.0.0
+python-multipart==0.0.32

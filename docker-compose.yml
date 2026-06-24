@@ -29,3 +29,13 @@ services:
 
       # Uncomment after uploading cookies via the UI
       # - COOKIES_FILE=/data/cookies.txt
+
+      # Email alerts when the cookies file expires / needs re-uploading.
+      # Gmail SMTP (same setup as the mobilism-search project). SMTP_PASS must
+      # be a Gmail App Password — https://myaccount.google.com/apppasswords
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - ALERT_EMAIL=${ALERT_EMAIL:-ericfaris@gmail.com}

@@ -25,3 +25,16 @@ MAX_EPISODES_PER_CHANNEL = int(os.environ.get("MAX_EPISODES_PER_CHANNEL", "20"))
 POLL_INTERVAL_HOURS = int(os.environ.get("POLL_INTERVAL_HOURS", "6"))
 COOKIES_FILE = os.environ.get("COOKIES_FILE", "/data/cookies.txt")
 
+# --- Email alerts (cookie expiry / invalid cookies) ---------------------------
+# Configure SMTP to receive an email when the cookies file needs to be re-uploaded.
+# For Gmail: SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_USER=<you>@gmail.com,
+# SMTP_PASS=<app password> (https://myaccount.google.com/apppasswords).
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASS = os.environ.get("SMTP_PASS", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", "") or SMTP_USER
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "ericfaris@gmail.com")
+# Don't re-send the same alert more often than this.
+ALERT_COOLDOWN_HOURS = int(os.environ.get("ALERT_COOLDOWN_HOURS", "24"))
+
