@@ -1,7 +1,9 @@
+name: slipcast
+
 services:
   app:
     build: .
-    image: ericfaris/youtube-rss:latest
+    image: ericfaris/slipcast:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -9,7 +11,7 @@ services:
       - ./data:/data
     environment:
       # External URL used in RSS feed links — must be reachable by your podcast app
-      - BASE_URL=https://rss.mooseflip.com
+      - BASE_URL=https://slipcast.mooseflip.com
 
       # Web UI login credentials (set in .env file)
       # Multi-user: AUTH_USERS=alice:pass1,bob:pass2 (takes precedence)

@@ -25,7 +25,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ericfaris/youtube-rss
+          images: ericfaris/slipcast
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

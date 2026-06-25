@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
     _scheduler.shutdown()
 
 
-app = FastAPI(title="YouTube RSS", lifespan=lifespan)
+app = FastAPI(title="Slipcast", lifespan=lifespan)
 
 
 def _client_ip(request: Request) -> str:
@@ -166,7 +166,7 @@ async def auth_middleware(request: Request, call_next):
         except Exception:
             pass
     _record_failure(ip)
-    return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="YouTube RSS"'})
+    return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Slipcast"'})
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(THUMBNAIL_DIR, exist_ok=True)
@@ -317,7 +317,7 @@ def _render_ui() -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
-    <title>YouTube RSS</title>
+    <title>Slipcast</title>
     <style>
         *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
@@ -482,7 +482,7 @@ def _render_ui() -> str:
 </head>
 <body>
     <header>
-        <h1>YouTube RSS</h1>
+        <h1>Slipcast</h1>
     </header>
     <main>
         <div class="card">

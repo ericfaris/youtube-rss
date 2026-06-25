@@ -1,6 +1,6 @@
-# youtube-rss
+# Slipcast
 
-A self-hosted server that turns YouTube channels into podcast RSS feeds. Subscribe to any YouTube channel in your podcast app and listen to new videos as audio episodes — automatically downloaded on a schedule.
+A self-hosted server that turns YouTube channels into podcast RSS feeds. Subscribe to any YouTube channel in your podcast app and listen to new videos as audio episodes — automatically downloaded on a schedule. Slipcast slips YouTube content straight into your podcast app.
 
 ## Features
 
@@ -26,7 +26,7 @@ The image is published to Docker Hub — no need to build locally.
 ```yaml
 services:
   app:
-    image: ericfaris/youtube-rss:latest
+    image: ericfaris/slipcast:latest
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -226,7 +226,7 @@ Subscribe to feed URLs in any podcast app (Pocket Casts, AntennaPod, Overcast, A
 
 ### Docker Hub (recommended)
 
-The image is published to Docker Hub at `ericfaris/youtube-rss:latest`. Pull it with:
+The image is published to Docker Hub at `ericfaris/slipcast:latest`. Pull it with:
 
 ```bash
 docker compose pull && docker compose up -d

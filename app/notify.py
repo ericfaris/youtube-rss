@@ -73,12 +73,12 @@ def _send(msg: EmailMessage) -> None:
 def _cookie_alert_message() -> EmailMessage:
     upload_url = config.BASE_URL.rstrip("/") + "/"
     msg = EmailMessage()
-    msg["Subject"] = "⚠️ YouTube RSS: cookies need updating"
+    msg["Subject"] = "⚠️ Slipcast: cookies need updating"
     msg["From"] = config.SMTP_FROM
     msg["To"] = config.ALERT_EMAIL
 
     plain = f"""\
-YouTube RSS — action needed
+Slipcast — action needed
 
 Channel polling has stopped because the YouTube cookies file is missing,
 empty, or expired. No new episodes will download until it's refreshed.
@@ -105,7 +105,7 @@ backlog automatically (or click "Poll Now").
       <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.08)">
         <tr>
           <td style="background:#36558f;padding:20px 28px;color:#ffffff;font-size:18px;font-weight:600">
-            ⚠️ YouTube RSS — cookies need updating
+            ⚠️ Slipcast — cookies need updating
           </td>
         </tr>
         <tr>
@@ -141,7 +141,7 @@ backlog automatically (or click "Poll Now").
           </td>
         </tr>
       </table>
-      <p style="margin:16px 0 0;font-size:11px;color:#aab6c0">Sent automatically by your self-hosted YouTube RSS server.</p>
+      <p style="margin:16px 0 0;font-size:11px;color:#aab6c0">Sent automatically by your self-hosted Slipcast server.</p>
     </td></tr>
   </table>
 </body>

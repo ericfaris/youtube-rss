@@ -1,6 +1,6 @@
 # Cloudflare Tunnel Setup
 
-This document explains how to expose your self-hosted youtube-rss app to the internet using a Cloudflare Tunnel, so that podcast apps like Pocket Casts (which fetch feeds through their own servers) can reach it.
+This document explains how to expose your self-hosted slipcast app to the internet using a Cloudflare Tunnel, so that podcast apps like Pocket Casts (which fetch feeds through their own servers) can reach it.
 
 ## Why Cloudflare Tunnel?
 
@@ -20,7 +20,7 @@ It works by running a small agent (`cloudflared`) on your machine that creates a
 - A domain name (e.g. purchased from Namecheap — any registrar works)
 - A free [Cloudflare account](https://cloudflare.com)
 - `cloudflared` installed on your machine (WSL2 instructions below)
-- Your youtube-rss container running locally
+- Your slipcast container running locally
 
 ---
 
@@ -69,13 +69,13 @@ This opens a browser window. Log into your Cloudflare account and select your do
 ## Step 4 — Create the Tunnel
 
 ```bash
-cloudflared tunnel create youtube-rss
+cloudflared tunnel create slipcast
 ```
 
 This creates a named tunnel and saves a credentials JSON file:
 ```
 Tunnel credentials written to /home/eric/.cloudflared/<TUNNEL-ID>.json
-Created tunnel youtube-rss with id <TUNNEL-ID>
+Created tunnel slipcast with id <TUNNEL-ID>
 ```
 
 The tunnel ID is a UUID like `83441a36-f288-40e3-ab39-9393b284ccc5`. Note it down — you will need it in the next step.
@@ -105,7 +105,7 @@ tunnel: <TUNNEL-ID>
 credentials-file: /etc/cloudflared/<TUNNEL-ID>.json
 
 ingress:
-  - hostname: rss.yourdomain.com
+  - hostname: slipcast.yourdomain.com
     service: http://localhost:8000
   - service: http_status:404
 ```
@@ -113,7 +113,7 @@ ingress:
 **What this does:**
 - `tunnel` — the name or ID of the tunnel to run
 - `credentials-file` — path to the credentials JSON (identifies this machine to Cloudflare)
-- `ingress` — routing rules: requests to `rss.yourdomain.com` are forwarded to `http://localhost:8000` on your machine; anything else returns a 404
+- `ingress` — routing rules: requests to `slipcast.yourdomain.com` are forwarded to `http://localhost:8000` on your machine; anything else returns a 404
 - The last `service: http_status:404` is required as a catch-all rule
 
 ---
@@ -131,13 +131,13 @@ sudo chmod 644 /etc/cloudflared/<TUNNEL-ID>.json
 
 ## Step 7 — Create the DNS Record
 
-Tell Cloudflare to route `rss.yourdomain.com` to your tunnel:
+Tell Cloudflare to route `slipcast.yourdomain.com` to your tunnel:
 
 ```bash
-cloudflared tunnel route dns youtube-rss rss.yourdomain.com
+cloudflared tunnel route dns slipcast slipcast.yourdomain.com
 ```
 
-This creates a `CNAME` record in your Cloudflare DNS pointing `rss.yourdomain.com` to `<TUNNEL-ID>.cfargotunnel.com`. You can verify it in the Cloudflare dashboard under **DNS**.
+This creates a `CNAME` record in your Cloudflare DNS pointing `slipcast.yourdomain.com` to `<TUNNEL-ID>.cfargotunnel.com`. You can verify it in the Cloudflare dashboard under **DNS**.
 
 ---
 
@@ -146,10 +146,10 @@ This creates a `CNAME` record in your Cloudflare DNS pointing `rss.yourdomain.co
 Before installing as a service, test that it works:
 
 ```bash
-cloudflared tunnel --config /etc/cloudflared/config.yml run youtube-rss
+cloudflared tunnel --config /etc/cloudflared/config.yml run slipcast
 ```
 
-Leave this running and open `https://rss.yourdomain.com` in a browser. You should see the management UI login prompt. If it works, hit `Ctrl+C` to stop it.
+Leave this running and open `https://slipcast.yourdomain.com` in a browser. You should see the management UI login prompt. If it works, hit `Ctrl+C` to stop it.
 
 ---
 
@@ -178,7 +178,7 @@ You should see `Active: active (running)` and log lines showing registered tunne
 Update `BASE_URL` in your `docker-compose.yml` to the public URL:
 
 ```yaml
-- BASE_URL=https://rss.yourdomain.com
+- BASE_URL=https://slipcast.yourdomain.com
 ```
 
 Restart the container:
@@ -193,8 +193,8 @@ Feed URLs shown in the management UI will now use the public domain, which is wh
 
 ## How to Verify Everything Is Working
 
-1. **Management UI** — open `https://rss.yourdomain.com` in a browser. You should see a login prompt.
-2. **Feed** — open `https://rss.yourdomain.com/feed/<channel_id>.xml` — you should see RSS XML without being prompted for a password (feeds are public).
+1. **Management UI** — open `https://slipcast.yourdomain.com` in a browser. You should see a login prompt.
+2. **Feed** — open `https://slipcast.yourdomain.com/feed/<channel_id>.xml` — you should see RSS XML without being prompted for a password (feeds are public).
 3. **Pocket Casts** — add the feed URL in the Pocket Casts mobile app. It should find the podcast immediately.
 
 ---
@@ -238,11 +238,11 @@ If you lose your machine and need to set this up again on a new one:
    cloudflared tunnel list
    ```
 4. Download the credentials for the existing tunnel from the Cloudflare dashboard (**Zero Trust** → **Networks** → **Tunnels** → select your tunnel → **Configure** → **Credentials**)
-   - Or delete the old tunnel and create a new one with `cloudflared tunnel create youtube-rss`, then update the DNS record
+   - Or delete the old tunnel and create a new one with `cloudflared tunnel create slipcast`, then update the DNS record
 5. Place the credentials JSON in `/etc/cloudflared/`
 6. Recreate `config.yml` using the tunnel ID (Step 5)
 7. Install the service (Step 9)
-8. The DNS record (`rss.yourdomain.com → CNAME → <tunnel-id>.cfargotunnel.com`) already exists in Cloudflare — no changes needed there unless you deleted and recreated the tunnel
+8. The DNS record (`slipcast.yourdomain.com → CNAME → <tunnel-id>.cfargotunnel.com`) already exists in Cloudflare — no changes needed there unless you deleted and recreated the tunnel
 
 ---
 
