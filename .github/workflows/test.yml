@@ -25,4 +25,5 @@ jobs:
           pip install -r requirements.txt pytest
 
       - name: Run tests
-        run: pytest -q
+        # `python -m pytest` puts the repo root on sys.path so `import app` works.
+        run: python -m pytest -q
