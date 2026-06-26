@@ -10,11 +10,12 @@
   "prConcurrentLimit": 5,
   "packageRules": [
     {
-      "description": "yt-dlp ships frequent YouTube extractor fixes — never batch or delay it; open its PR immediately and label it for visibility. Kept manual-merge: our CI validates install + unit tests, but not live YouTube downloads, so a human should merge then deploy to confirm.",
+      "description": "yt-dlp ships frequent YouTube extractor fixes — never batch or delay it; open its PR immediately. Automerged once the Tests workflow is green. Note: CI validates install + unit tests, not live YouTube extraction; automerge lands it on main, but production only changes on a deliberate release/deploy, so the real-world check still happens at deploy time. platformAutomerge:false lets Renovate merge via API without branch protection.",
       "matchPackageNames": ["yt-dlp"],
       "schedule": ["at any time"],
       "labels": ["dependencies", "yt-dlp"],
-      "automerge": false
+      "automerge": true,
+      "platformAutomerge": false
     },
     {
       "description": "Group the GitHub Actions bumps so they arrive as one PR.",
