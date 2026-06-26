@@ -21,6 +21,13 @@
       "description": "Group the GitHub Actions bumps so they arrive as one PR.",
       "matchManagers": ["github-actions"],
       "groupName": "github-actions"
+    },
+    {
+      "description": "Stay on the Python 3.12 runtime; major Python upgrades are done deliberately. Still receives 3.12.x patch bumps.",
+      "matchDepNames": ["python"],
+      "matchManagers": ["dockerfile", "github-actions"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
     }
   ]
 }
