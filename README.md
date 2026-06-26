@@ -234,6 +234,8 @@ docker compose pull && docker compose up -d
 
 No local build required.
 
+> **Upgrading from `youtube-rss`?** This project's Compose project name is now `slipcast` (see `name:` in `docker-compose.yml`), so `docker compose up -d` creates fresh `slipcast-*` containers and leaves your old `youtube-rss-*` containers orphaned. Remove the old one with `docker rm -f youtube-rss-app-1` (or `docker compose -p youtube-rss down`). Your `./data` volume is unaffected — it's a host bind-mount, so audio, thumbnails, and the database carry over.
+
 ### Building locally
 
 ```bash

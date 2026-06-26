@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from starlette.datastructures import Headers
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from app import config, main, notify
+from app import __version__, config, database as db, main, notify
 
 VALID = b"# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t9999999999\tSID\tabc\n"
 
@@ -70,3 +70,20 @@ def test_health_reports_version():
     body = main.health()
     assert body["status"] == "ok"
     assert body["version"] == main.VERSION
+
+
+def test_served_version_matches_package():
+    # Guards against the package __version__ drifting from what /health serves
+    # (VERSION may have a "+<gitsha>" suffix appended locally).
+    assert main.VERSION.split("+", 1)[0] == __version__
+
+
+def test_app_title_is_slipcast():
+    assert main.app.title == "Slipcast"
+
+
+def test_ui_shows_slipcast_branding():
+    db.init_db()
+    html = main._render_ui()
+    assert "<title>Slipcast</title>" in html
+    assert "<h1>Slipcast</h1>" in html

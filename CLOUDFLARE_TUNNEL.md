@@ -68,6 +68,8 @@ This opens a browser window. Log into your Cloudflare account and select your do
 
 ## Step 4 — Create the Tunnel
 
+> **Note:** `slipcast` here is just an example tunnel name for a fresh setup. An existing tunnel keeps whatever name it was created with — a tunnel is referenced by its **ID** (in `config.yml` and credentials filename), not its name, so renaming the app/hostname does **not** require recreating or renaming the tunnel. You only add/point the public hostname.
+
 ```bash
 cloudflared tunnel create slipcast
 ```
