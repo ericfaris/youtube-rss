@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "labels": ["dependencies"],
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "packageRules": [
+    {
+      "description": "yt-dlp ships frequent YouTube extractor fixes — never batch or delay it; open its PR immediately and label it for visibility. Kept manual-merge: our CI validates install + unit tests, but not live YouTube downloads, so a human should merge then deploy to confirm.",
+      "matchPackageNames": ["yt-dlp"],
+      "schedule": ["at any time"],
+      "labels": ["dependencies", "yt-dlp"],
+      "automerge": false
+    },
+    {
+      "description": "Group the GitHub Actions bumps so they arrive as one PR.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions"
+    }
+  ]
+}
