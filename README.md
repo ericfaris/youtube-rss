@@ -84,6 +84,7 @@ All configuration is via environment variables in `docker-compose.yml`. Credenti
 | `COOKIES_FILE` | *(none)* | Path to YouTube cookies file (upload via UI, then uncomment) |
 
 ### Important notes
+- ⚠️ **Always set credentials before exposing the app.** If neither `AUTH_USERS` nor `AUTH_USER`/`AUTH_PASS` is set, authentication is **disabled** and the entire management UI — including channel management and cookie upload — is open to anyone who can reach it. Set `AUTH_USERS=alice:pass1,bob:pass2` (preferred) or `AUTH_USER`/`AUTH_PASS` whenever the app is reachable beyond localhost.
 - `BASE_URL` must be reachable by your podcast app. If using Pocket Casts or another server-side app, this must be a public URL. See [CLOUDFLARE_TUNNEL.md](CLOUDFLARE_TUNNEL.md) for how to expose the app publicly using Cloudflare Tunnel.
 - The port is bound to `127.0.0.1` so the app is only reachable from localhost — external traffic must go through a reverse proxy or tunnel (e.g. Cloudflare Tunnel or Tailscale).
 - The management UI (`/`) requires Basic Auth. Feed and audio endpoints (`/feed/`, `/audio/`) are public so podcast apps can access them without credentials.

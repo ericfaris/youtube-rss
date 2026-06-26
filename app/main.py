@@ -1,6 +1,6 @@
 import base64
 import html as _html
-import json
+import ipaddress
 import logging
 import os
 import re
@@ -83,13 +83,30 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Slipcast", lifespan=lifespan)
 
 
+def _is_trusted_proxy(ip: str) -> bool:
+    """Only believe forwarded-for headers from a loopback/private peer.
+
+    Behind the Cloudflare tunnel the direct peer is cloudflared on the Docker
+    bridge (loopback/RFC1918), and the real client is in CF-Connecting-IP. If a
+    request arrives from a public peer we must NOT trust client-supplied
+    forwarding headers, or an attacker could spoof IPs to evade the rate limiter.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_private
+
+
 def _client_ip(request: Request) -> str:
     """Return the real client IP, accounting for Cloudflare and other proxies."""
-    for header in ("CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"):
-        value = request.headers.get(header)
-        if value:
-            return value.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else None
+    if peer and _is_trusted_proxy(peer):
+        for header in ("CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"):
+            value = request.headers.get(header)
+            if value:
+                return value.split(",")[0].strip()
+    return peer or "unknown"
 
 
 def _check_rate_limit(ip: str) -> bool:
@@ -122,21 +139,38 @@ def _prune_rate_limit_table():
             del _failed_attempts[ip]
 
 
-def _csrf_origin_ok(request: Request) -> bool:
-    """Return True if Origin/Referer matches Host, mitigating CSRF on POST requests."""
+# GET endpoints that mutate state ("shareable links"). They bypass the usual
+# POST-only CSRF gate, so they get the same Origin/Referer check.
+_MUTATING_GET_PATHS = frozenset({"/add", "/download"})
+
+
+def _is_state_changing(request: Request) -> bool:
+    return request.method == "POST" or request.url.path in _MUTATING_GET_PATHS
+
+
+def _csrf_ok(request: Request) -> bool:
+    """Validate Origin/Referer against Host for state-changing requests.
+
+    - POST (UI form submissions always carry Origin/Referer): fail **closed** —
+      a missing header is rejected.
+    - Mutating GET shareable links: allow a missing Origin/Referer (top-level
+      navigation, bookmarks, address-bar) but reject a *mismatched* one, which
+      blocks the embedded cross-site request (`<img src=".../add?...">`) attack.
+    """
     host = request.headers.get("Host", "")
     for header in ("Origin", "Referer"):
         value = request.headers.get(header, "")
         if value and value != "null":
             return urlparse(value).netloc == host
-    return True  # no Origin/Referer — allow direct/non-browser clients
+    # No usable Origin/Referer: only allowed for non-POST (GET shareable links).
+    return request.method != "POST"
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     is_public = request.url.path.startswith(_PUBLIC_PREFIXES)
     if not AUTH_CREDENTIALS:
-        if not is_public and request.method == "POST" and not _csrf_origin_ok(request):
+        if not is_public and _is_state_changing(request) and not _csrf_ok(request):
             return Response(status_code=403, content="CSRF check failed")
         return await call_next(request)
 
@@ -160,7 +194,7 @@ async def auth_middleware(request: Request, call_next):
                 for u, p in AUTH_CREDENTIALS
             ):
                 _clear_failures(ip)
-                if request.method == "POST" and not _csrf_origin_ok(request):
+                if _is_state_changing(request) and not _csrf_ok(request):
                     return Response(status_code=403, content="CSRF check failed")
                 return await call_next(request)
         except Exception:
@@ -265,7 +299,8 @@ def _render_ui() -> str:
         url_escaped = _html.escape(ch["url"], quote=True)
         episode_count = len(db.get_episodes(channel_id)) if channel_id else 0
         feed_url = _feed_url(channel_id) if channel_id else "—"
-        feed_link = f'<a href="{feed_url}" target="_blank">{feed_url}</a> <button type="button" class="btn-copy" data-url="{_html.escape(feed_url, quote=True)}">&#128203;</button>' if channel_id else "—"
+        feed_url_esc = _html.escape(feed_url, quote=True)
+        feed_link = f'<a href="{feed_url_esc}" target="_blank">{feed_url_esc}</a> <button type="button" class="btn-copy" data-url="{feed_url_esc}">&#128203;</button>' if channel_id else "—"
         rows += f"""
         <tr>
             <td>{name_escaped}</td>
@@ -277,7 +312,7 @@ def _render_ui() -> str:
                     <button class="btn-secondary">Poll Now</button>
                 </form>
                 <form method="post" action="/channels/remove" style="display:inline"
-                      onsubmit="return confirm({_html.escape(json.dumps(f'Remove {name}?'), quote=True)})"  >
+                      data-confirm="{_html.escape(f'Remove {name}?', quote=True)}">
                     <input type="hidden" name="url" value="{url_escaped}">
                     <button class="btn-danger">Remove</button>
                 </form>
@@ -295,7 +330,8 @@ def _render_ui() -> str:
         channel_id_escaped = _html.escape(channel_id, quote=True)
         episode_count = len(db.get_episodes(channel_id))
         feed_url = _feed_url(channel_id)
-        feed_link = f'<a href="{feed_url}" target="_blank">{feed_url}</a> <button type="button" class="btn-copy" data-url="{_html.escape(feed_url, quote=True)}">&#128203;</button>'
+        feed_url_esc = _html.escape(feed_url, quote=True)
+        feed_link = f'<a href="{feed_url_esc}" target="_blank">{feed_url_esc}</a> <button type="button" class="btn-copy" data-url="{feed_url_esc}">&#128203;</button>'
         unsub_rows += f"""
         <tr>
             <td>{name_escaped}</td>
@@ -541,33 +577,7 @@ def _render_ui() -> str:
         </div>
     </main>
     <div class="version">v{VERSION}</div>
-    <script>
-        document.addEventListener('click', function(e) {{
-            const btn = e.target.closest('.btn-copy');
-            if (!btn) return;
-            const url = btn.dataset.url;
-            function onSuccess() {{
-                btn.textContent = '\u2713';
-                setTimeout(() => btn.innerHTML = '&#128203;', 1500);
-            }}
-            if (navigator.clipboard && navigator.clipboard.writeText) {{
-                navigator.clipboard.writeText(url).then(onSuccess).catch(() => fallback(url, onSuccess));
-            }} else {{
-                fallback(url, onSuccess);
-            }}
-        }});
-        function fallback(text, onSuccess) {{
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            document.body.appendChild(ta);
-            ta.focus();
-            ta.select();
-            try {{ document.execCommand('copy'); onSuccess(); }} catch(e) {{ prompt('Copy this URL:', text); }}
-            document.body.removeChild(ta);
-        }}
-    </script>
+    <script src="/static/app.js"></script>
 </body>
 </html>"""
 
@@ -576,7 +586,7 @@ def _render_ui() -> str:
 def index():
     return HTMLResponse(
         content=_render_ui(),
-        headers={"Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"},
+        headers={"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'"},
     )
 
 

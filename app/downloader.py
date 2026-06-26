@@ -5,6 +5,7 @@ import subprocess
 import time
 import urllib.request
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import yt_dlp
 
@@ -13,6 +14,23 @@ from app import notify
 from app.config import AUDIO_DIR, COOKIES_FILE, MAX_EPISODES_PER_CHANNEL, THUMBNAIL_DIR
 
 _CHANNEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# Hosts YouTube/Google serve thumbnails from. We only fetch thumbnail URLs that
+# resolve to these, so attacker-influenced metadata can't point urlretrieve at
+# an internal address (SSRF) or a local file (file://).
+_ALLOWED_THUMBNAIL_HOST_SUFFIXES = (".ytimg.com", ".ggpht.com", ".googleusercontent.com")
+
+
+def _allowed_thumbnail_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    return host.endswith(_ALLOWED_THUMBNAIL_HOST_SUFFIXES) or host in ("ytimg.com", "ggpht.com")
 
 # Error fragments that indicate YouTube is rejecting us for lack of valid cookies.
 _AUTH_ERROR_SIGNALS = (
@@ -38,6 +56,9 @@ logger = logging.getLogger(__name__)
 def _download_thumbnail(url: str, dest: str) -> bool:
     if os.path.exists(dest):
         return True
+    if not _allowed_thumbnail_url(url):
+        logger.warning("Refusing to fetch thumbnail from disallowed URL: %r", url)
+        return False
     tmp = dest + ".tmp"
     try:
         urllib.request.urlretrieve(url, tmp)
@@ -175,6 +196,9 @@ def _fetch_channel_entries(channel_url: str, max_entries: int) -> list[dict]:
 def _download_entry(entry: dict, channel_id: str, channel_name: str) -> dict | None:
     video_id = entry.get("id")
     if not video_id:
+        return None
+    if not _VIDEO_ID_RE.match(video_id):
+        logger.warning("Skipping entry with suspicious video_id: %r", video_id)
         return None
 
     audio_dir = _audio_dir_for(channel_id)

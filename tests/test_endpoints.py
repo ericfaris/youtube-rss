@@ -9,8 +9,19 @@ import pytest
 from fastapi import HTTPException
 from starlette.datastructures import Headers
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.requests import Request
 
-from app import __version__, config, database as db, main, notify
+from app import __version__, config, database as db, downloader, main, notify
+
+
+def _req(method="GET", path="/", headers=None, client=("8.8.8.8", 1234)):
+    raw = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+    scope = {
+        "type": "http", "method": method, "path": path, "headers": raw,
+        "query_string": b"", "client": client, "scheme": "https",
+        "server": ("slipcast.example", 443),
+    }
+    return Request(scope)
 
 VALID = b"# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t9999999999\tSID\tabc\n"
 
@@ -87,3 +98,93 @@ def test_ui_shows_slipcast_branding():
     html = main._render_ui()
     assert "<title>Slipcast</title>" in html
     assert "<h1>Slipcast</h1>" in html
+
+
+# --- CSRF -------------------------------------------------------------------
+
+def test_state_changing_detection():
+    assert main._is_state_changing(_req("POST", "/channels/add"))
+    assert main._is_state_changing(_req("GET", "/add"))       # mutating shareable link
+    assert main._is_state_changing(_req("GET", "/download"))
+    assert not main._is_state_changing(_req("GET", "/feed/UC123.xml"))
+    assert not main._is_state_changing(_req("GET", "/"))
+
+
+def test_csrf_post_fails_closed_without_origin():
+    # A POST with no Origin/Referer is rejected (CSRF fail-closed).
+    assert not main._csrf_ok(_req("POST", "/channels/add", {"Host": "slipcast.example"}))
+
+
+def test_csrf_post_allows_matching_origin():
+    assert main._csrf_ok(_req("POST", "/channels/add", {
+        "Host": "slipcast.example", "Origin": "https://slipcast.example",
+    }))
+
+
+def test_csrf_post_blocks_cross_origin():
+    assert not main._csrf_ok(_req("POST", "/channels/add", {
+        "Host": "slipcast.example", "Origin": "https://evil.example",
+    }))
+
+
+def test_csrf_get_link_allows_no_referer_but_blocks_cross_site():
+    # Top-level navigation / bookmark (no Referer) is allowed for GET links...
+    assert main._csrf_ok(_req("GET", "/add", {"Host": "slipcast.example"}))
+    # ...but an embedded cross-site request carrying a foreign Referer is blocked.
+    assert not main._csrf_ok(_req("GET", "/add", {
+        "Host": "slipcast.example", "Referer": "https://evil.example/page",
+    }))
+
+
+# --- Client IP / rate-limit spoofing ----------------------------------------
+
+def test_trusted_proxy_classification():
+    assert main._is_trusted_proxy("127.0.0.1")
+    assert main._is_trusted_proxy("::1")
+    assert main._is_trusted_proxy("172.21.0.1")  # docker bridge
+    assert not main._is_trusted_proxy("8.8.8.8")
+    assert not main._is_trusted_proxy("not-an-ip")
+
+
+def test_client_ip_trusts_forwarded_only_from_private_peer():
+    # Behind the tunnel: private peer, real client in CF-Connecting-IP.
+    r = _req(client=("172.21.0.1", 5), headers={"CF-Connecting-IP": "203.0.113.9"})
+    assert main._client_ip(r) == "203.0.113.9"
+    # Direct public peer: forwarded header is NOT trusted (anti-spoofing).
+    r = _req(client=("8.8.8.8", 5), headers={"X-Forwarded-For": "10.0.0.1"})
+    assert main._client_ip(r) == "8.8.8.8"
+
+
+# --- SSRF / thumbnail URL allowlist -----------------------------------------
+
+@pytest.mark.parametrize("url", [
+    "https://i.ytimg.com/vi/abc/hqdefault.jpg",
+    "https://yt3.ggpht.com/abc=s900",
+    "https://lh3.googleusercontent.com/abc",
+])
+def test_thumbnail_allows_youtube_hosts(url):
+    assert downloader._allowed_thumbnail_url(url)
+
+
+@pytest.mark.parametrize("url", [
+    "http://169.254.169.254/latest/meta-data/",   # cloud metadata SSRF
+    "file:///etc/passwd",                         # local file read
+    "https://evil.example/x.jpg",                 # arbitrary host
+    "https://evilytimg.com/x.jpg",                # suffix-confusion
+    "https://i.ytimg.com.evil.example/x.jpg",     # subdomain-confusion
+])
+def test_thumbnail_blocks_disallowed_urls(url):
+    assert not downloader._allowed_thumbnail_url(url)
+
+
+# --- video_id path-traversal guard ------------------------------------------
+
+@pytest.mark.parametrize("vid,ok", [
+    ("dQw4w9WgXcQ", True),
+    ("abc-_123", True),
+    ("../../etc/passwd", False),
+    ("abc/def", False),
+    ("a b", False),
+])
+def test_video_id_validation(vid, ok):
+    assert bool(downloader._VIDEO_ID_RE.match(vid)) is ok
