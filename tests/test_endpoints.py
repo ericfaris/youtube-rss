@@ -38,7 +38,7 @@ def test_upload_valid_cookies_saved(tmp_path, monkeypatch):
     dest = tmp_path / "cookies.txt"
     monkeypatch.setattr(main, "COOKIES_FILE", str(dest))
     resp = asyncio.run(main.upload_cookies(_upload(VALID)))
-    assert resp.status_code == 302
+    assert resp.status_code == 200  # JSON {ok: true} consumed by the dashboard
     assert dest.read_bytes() == VALID
 
 
@@ -73,7 +73,7 @@ def test_test_email_sends_when_configured(monkeypatch):
     sent = {}
     monkeypatch.setattr(notify, "send_cookie_alert", lambda force=False: sent.setdefault("f", force) or True)
     resp = main.test_email()
-    assert resp.status_code == 302
+    assert resp.status_code == 200  # JSON {ok: true}
     assert sent["f"] is True  # forced past the cooldown
 
 
@@ -94,10 +94,19 @@ def test_app_title_is_slipcast():
 
 
 def test_ui_shows_slipcast_branding():
-    db.init_db()
-    html = main._render_ui()
+    # The dashboard is a static shell hydrated client-side from /api/state.
+    html = main._PAGE
     assert "<title>Slipcast</title>" in html
-    assert "<h1>Slipcast</h1>" in html
+    assert 'class="brand-name">Slipcast<' in html
+
+
+def test_api_state_shape():
+    db.init_db()
+    resp = main.api_state()
+    import json
+    data = json.loads(resp.body)
+    for key in ("channels", "unsubscribed", "cookies", "email", "next_poll", "jobs", "version"):
+        assert key in data
 
 
 # --- CSRF -------------------------------------------------------------------

@@ -1,5 +1,4 @@
 import base64
-import html as _html
 import ipaddress
 import logging
 import os
@@ -13,10 +12,11 @@ from urllib.parse import urlparse
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import database as db
+from app import jobs
 from app import notify
 from app.config import AUDIO_DIR, ALERT_EMAIL, AUTH_CREDENTIALS, BASE_URL, COOKIES_FILE, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
 from app.downloader import cookies_status, download_single, poll_all, poll_channel, remove_channel_data, valid_cookie_file
@@ -210,7 +210,7 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 
 
 # ---------------------------------------------------------------------------
-# Management UI
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _next_poll_label() -> str:
@@ -237,346 +237,212 @@ def _feed_url(channel_id: str) -> str:
     return f"{BASE_URL}/feed/{channel_id}.xml"
 
 
-def _render_auth_card() -> str:
-    cs = cookies_status()
-    if cs["present"]:
-        badge = f'<span style="color:#4a7c3f;font-weight:600">&#10003; Cookies active</span> <span style="font-size:0.8rem;color:#96acb7">updated {cs["updated"]}</span>'
-    else:
-        badge = '<span style="color:#a03030;font-weight:600">&#10007; No cookies</span> <span style="font-size:0.8rem;color:#96acb7">YouTube may block downloads</span>'
-
-    if notify._smtp_configured():
-        email_badge = (
-            f'<span style="font-size:0.8rem;color:#96acb7">&#9993; Alerts on &mdash; '
-            f'{_html.escape(ALERT_EMAIL)}</span>'
-        )
-        email_btn_attr = ""
-    else:
-        email_badge = (
-            '<span style="font-size:0.8rem;color:#96acb7">&#9993; Email alerts not configured '
-            '(set SMTP_* in .env)</span>'
-        )
-        email_btn_attr = " disabled"
-
-    return f"""
-        <div class="card">
-            <div class="card-header">YouTube Cookies</div>
-            <div class="card-body">
-                <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px">
-                    {badge}
-                </div>
-                <form class="add-form" method="post" action="/auth/cookies" enctype="multipart/form-data">
-                    <input type="file" name="file" accept=".txt" required
-                           style="flex:1;min-width:200px;padding:8px;border:1px solid #d4e4bc;border-radius:6px;background:#f8fbf5;font-size:0.85rem">
-                    <button type="submit" class="btn-primary">Upload cookies.txt</button>
-                </form>
-                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
-                    {email_badge}
-                    <form method="post" action="/auth/test-email" style="margin:0">
-                        <button type="submit" class="btn-secondary"{email_btn_attr}>Send test email</button>
-                    </form>
-                </div>
-                <details style="margin-top:14px">
-                    <summary style="font-size:0.82rem;color:#36558f;cursor:pointer;user-select:none">How to export cookies.txt</summary>
-                    <ol style="margin:10px 0 0 18px;font-size:0.82rem;color:#1a2335;line-height:1.9">
-                        <li>Install the <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" style="color:#36558f">Get cookies.txt LOCALLY</a> extension in Chrome (or <a href="https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/" target="_blank" style="color:#36558f">cookies.txt</a> in Firefox)</li>
-                        <li>Go to <a href="https://www.youtube.com" target="_blank" style="color:#36558f">youtube.com</a> and make sure you are logged in</li>
-                        <li>Click the extension icon and export as <strong>cookies.txt</strong></li>
-                        <li>Upload the file using the form above</li>
-                        <li>Cookies expire after a few weeks — repeat when downloads start failing with a bot error</li>
-                    </ol>
-                </details>
-            </div>
-        </div>"""
+def _channel_thumb_exists(channel_id: str) -> bool:
+    return bool(channel_id) and os.path.exists(os.path.join(THUMBNAIL_DIR, channel_id, "channel.jpg"))
 
 
-def _render_ui() -> str:
-    channels = db.get_channels()
-    rows = ""
-    for ch in channels:
-        channel_id = ch["channel_id"]
-        name = ch["channel_name"] or ch["url"]
-        name_escaped = _html.escape(name, quote=True)
-        url_escaped = _html.escape(ch["url"], quote=True)
-        episode_count = len(db.get_episodes(channel_id)) if channel_id else 0
-        feed_url = _feed_url(channel_id) if channel_id else "—"
-        feed_url_esc = _html.escape(feed_url, quote=True)
-        feed_link = f'<a href="{feed_url_esc}" target="_blank">{feed_url_esc}</a> <button type="button" class="btn-copy" data-url="{feed_url_esc}">&#128203;</button>' if channel_id else "—"
-        rows += f"""
-        <tr>
-            <td>{name_escaped}</td>
-            <td>{episode_count}</td>
-            <td class="feed-url">{feed_link}</td>
-            <td>
-                <form method="post" action="/channels/poll" style="display:inline">
-                    <input type="hidden" name="url" value="{url_escaped}">
-                    <button class="btn-secondary">Poll Now</button>
-                </form>
-                <form method="post" action="/channels/remove" style="display:inline"
-                      data-confirm="{_html.escape(f'Remove {name}?', quote=True)}">
-                    <input type="hidden" name="url" value="{url_escaped}">
-                    <button class="btn-danger">Remove</button>
-                </form>
-            </td>
-        </tr>"""
+def _thumb_url(channel_id: str) -> str | None:
+    return f"{BASE_URL}/thumbnails/{channel_id}/channel.jpg" if _channel_thumb_exists(channel_id) else None
 
-    empty = "<tr><td colspan='4' class='empty'>No channels yet — add one below.</td></tr>" if not channels else ""
 
-    unsubscribed = db.get_unsubscribed_channels()
-    unsub_rows = ""
-    for ch in unsubscribed:
-        channel_id = ch["channel_id"]
-        name = ch["channel_name"] or channel_id
-        name_escaped = _html.escape(name, quote=True)
-        channel_id_escaped = _html.escape(channel_id, quote=True)
-        episode_count = len(db.get_episodes(channel_id))
-        feed_url = _feed_url(channel_id)
-        feed_url_esc = _html.escape(feed_url, quote=True)
-        feed_link = f'<a href="{feed_url_esc}" target="_blank">{feed_url_esc}</a> <button type="button" class="btn-copy" data-url="{feed_url_esc}">&#128203;</button>'
-        unsub_rows += f"""
-        <tr>
-            <td>{name_escaped}</td>
-            <td>{episode_count}</td>
-            <td class="feed-url">{feed_link}</td>
-            <td>
-                <form method="post" action="/channels/subscribe" style="display:inline">
-                    <input type="hidden" name="channel_id" value="{channel_id_escaped}">
-                    <input type="hidden" name="channel_name" value="{name_escaped}">
-                    <button class="btn-secondary">Subscribe</button>
-                </form>
-            </td>
-        </tr>"""
-    unsub_empty = "<tr><td colspan='4' class='empty'>No one-off downloads yet.</td></tr>" if not unsubscribed else ""
+def _episode_count(channel_id: str | None) -> int:
+    return len(db.get_episodes(channel_id)) if channel_id else 0
 
-    return f"""<!DOCTYPE html>
+
+def _total_episodes() -> int:
+    return sum(len(db.get_episodes(cid)) for cid in db.get_all_channel_ids())
+
+
+def _is_valid_channel_url(url: str) -> bool:
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return False
+    return p.scheme in ("http", "https") and bool(p.netloc)
+
+
+# ---------------------------------------------------------------------------
+# Background job wrappers — record progress so the UI can show it live
+# ---------------------------------------------------------------------------
+
+def _run_poll(url: str, label: str | None = None):
+    rurl = url.rstrip("/")
+
+    def lookup():
+        ch = next((c for c in db.get_channels() if c["url"] == rurl), None)
+        if not ch:
+            return None, None
+        return (ch["channel_name"] or None), (ch["channel_id"] or None)
+
+    pre_name, pre_cid = lookup()
+    label = label or pre_name or rurl
+    before = _episode_count(pre_cid)
+    jid = jobs.start("poll", label)
+    try:
+        poll_channel(url)
+        post_name, post_cid = lookup()
+        label = post_name or label
+        added = _episode_count(post_cid) - before
+        if added > 0:
+            jobs.finish(jid, "success", f"{label}: {added} new episode(s)")
+        else:
+            jobs.finish(jid, "success", f"{label}: no new episodes")
+    except Exception as exc:  # poll_channel is defensive, but never let a job hang
+        logger.exception("Poll job failed for %s", rurl)
+        jobs.finish(jid, "error", f"{label}: {exc}")
+
+
+def _run_download(url: str, subscribe: bool):
+    jid = jobs.start("download", url)
+    before = _total_episodes()
+    try:
+        download_single(url, subscribe)
+        if _total_episodes() > before:
+            jobs.finish(jid, "success", "Episode downloaded")
+        else:
+            jobs.finish(jid, "error", "Nothing downloaded — video may be unavailable, private, or already saved")
+    except Exception as exc:
+        logger.exception("Download job failed for %s", url)
+        jobs.finish(jid, "error", str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Management UI shell — content is rendered client-side from /api/state
+# ---------------------------------------------------------------------------
+
+_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/static/styles.css">
     <title>Slipcast</title>
-    <style>
-        *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-
-        body {{
-            font-family: system-ui, -apple-system, sans-serif;
-            background: #f0f4f8;
-            color: #1a2335;
-            min-height: 100vh;
-        }}
-
-        header {{
-            background: #36558f;
-            padding: 0 32px;
-            height: 56px;
-            display: flex;
-            align-items: center;
-            box-shadow: 0 2px 8px rgba(54,85,143,0.3);
-        }}
-        header h1 {{
-            color: #d4e4bc;
-            font-size: 1.1rem;
-            font-weight: 600;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-        }}
-
-        main {{
-            max-width: 1000px;
-            margin: 36px auto;
-            padding: 0 24px;
-            display: flex;
-            flex-direction: column;
-            gap: 24px;
-        }}
-
-        .card {{
-            background: #fff;
-            border-radius: 10px;
-            box-shadow: 0 1px 4px rgba(54,85,143,0.08);
-            overflow: hidden;
-        }}
-        .card-header {{
-            background: #36558f;
-            color: #d4e4bc;
-            padding: 14px 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            letter-spacing: 0.07em;
-            text-transform: uppercase;
-        }}
-        .card-body {{
-            padding: 20px;
-        }}
-
-        table {{ width: 100%; border-collapse: collapse; }}
-        th {{
-            font-size: 0.72rem;
-            text-transform: uppercase;
-            letter-spacing: .06em;
-            color: #96acb7;
-            text-align: left;
-            padding: 10px 14px;
-            border-bottom: 2px solid #d4e4bc;
-        }}
-        td {{
-            padding: 12px 14px;
-            border-bottom: 1px solid #f0f4f0;
-            vertical-align: middle;
-            font-size: 0.9rem;
-        }}
-        tr:last-child td {{ border-bottom: none; }}
-        .feed-url {{ font-size: 0.78rem; color: #96acb7; }}
-        .feed-url a {{ color: #36558f; text-decoration: none; }}
-        .feed-url a:hover {{ text-decoration: underline; }}
-        .empty {{ color: #96acb7; font-style: italic; padding: 20px 14px; font-size: 0.88rem; }}
-
-        .add-form {{
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            flex-wrap: wrap;
-        }}
-        input[type=text] {{
-            flex: 1;
-            min-width: 200px;
-            padding: 10px 14px;
-            border: 1px solid #d4e4bc;
-            border-radius: 6px;
-            font-size: 0.9rem;
-            background: #f8fbf5;
-            color: #1a2335;
-            transition: border-color 0.15s;
-        }}
-        input[type=text]:focus {{
-            outline: none;
-            border-color: #96acb7;
-            background: #fff;
-        }}
-
-        button {{
-            padding: 10px 18px;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            font-weight: 500;
-            cursor: pointer;
-            border: none;
-            white-space: nowrap;
-            transition: background 0.15s, opacity 0.15s;
-        }}
-        .btn-primary {{ background: #36558f; color: #d4e4bc; }}
-        .btn-primary:hover {{ background: #2a4275; }}
-        .btn-secondary {{
-            background: none;
-            color: #36558f;
-            border: 1px solid #96acb7;
-            padding: 6px 12px;
-            font-size: 0.8rem;
-        }}
-        .btn-secondary:hover {{ background: #f0f4f8; }}
-        .btn-danger {{
-            background: none;
-            color: #a03030;
-            border: 1px solid #d4a0a0;
-            padding: 6px 12px;
-            font-size: 0.8rem;
-        }}
-        .btn-danger:hover {{ background: #fff5f5; }}
-        .btn-copy {{
-            background: none;
-            border: none;
-            padding: 2px 5px;
-            font-size: 1rem;
-            vertical-align: middle;
-            cursor: pointer;
-            opacity: 0.4;
-            transition: opacity 0.15s;
-        }}
-        .btn-copy:hover {{ opacity: 1; }}
-
-        .version {{
-            position: fixed;
-            bottom: 12px;
-            right: 16px;
-            font-size: 0.72rem;
-            color: #96acb7;
-            opacity: 0.6;
-        }}
-
-        .toggle-label {{
-            display: flex;
-            align-items: center;
-            gap: 7px;
-            font-size: 0.85rem;
-            color: #96acb7;
-            white-space: nowrap;
-            cursor: pointer;
-        }}
-        .toggle-label input {{ accent-color: #36558f; }}
-
-        .actions {{ display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }}
-    </style>
 </head>
 <body>
-    <header>
-        <h1>Slipcast</h1>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="appbar">
+        <div class="appbar-inner">
+            <div class="brand">
+                <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" width="26" height="26">
+                    <path d="M4 14a8 8 0 0 1 8-8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+                    <path d="M4 19a13 13 0 0 1 13-13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" opacity=".55"/>
+                    <circle cx="6" cy="18" r="2.4" fill="currentColor"/>
+                </svg>
+                <span class="brand-name">Slipcast</span>
+            </div>
+            <div class="appbar-actions">
+                <span id="activity" class="activity" hidden><span class="spinner"></span><span id="activity-text">Working…</span></span>
+                <button id="poll-all" class="btn btn-ghost" type="button">Poll all</button>
+            </div>
+        </div>
     </header>
-    <main>
-        <div class="card">
-            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
-                <span>Subscribed Channels</span>
-                <span style="font-size:0.75rem;font-weight:400;opacity:0.8">{_next_poll_label()}</span>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Channel</th>
-                        <th>Episodes</th>
-                        <th>Feed URL</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows}{empty}
-                </tbody>
-            </table>
-            <div class="card-body">
-                <form class="add-form" method="post" action="/channels/add">
-                    <input type="text" name="url" placeholder="https://www.youtube.com/@channel" required>
-                    <button type="submit" class="btn-primary">Add Channel</button>
-                </form>
-            </div>
-        </div>
 
-        {_render_auth_card()}
+    <div id="cookie-banner" class="banner" hidden></div>
 
-        <div class="card">
-            <div class="card-header">One-off Downloads</div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Channel</th>
-                        <th>Episodes</th>
-                        <th>Feed URL</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {unsub_rows}{unsub_empty}
-                </tbody>
-            </table>
-            <div class="card-body">
-                <form class="add-form" method="post" action="/episodes/download">
-                    <input type="text" name="url" placeholder="https://youtu.be/abc123 or youtube.com/watch?v=..." required>
-                    <label class="toggle-label">
-                        <input type="checkbox" name="subscribe" value="true">
-                        Subscribe to channel
-                    </label>
-                    <button type="submit" class="btn-primary">Download Episode</button>
-                </form>
+    <main id="main" class="wrap">
+        <section class="section" aria-labelledby="subs-h">
+            <div class="section-head">
+                <h2 id="subs-h">Subscribed channels <span id="subs-count" class="count-pill"></span></h2>
+                <div class="next-poll" id="next-poll"></div>
             </div>
-        </div>
+
+            <form id="add-form" class="inline-form" autocomplete="off">
+                <label class="visually-hidden" for="add-url">YouTube channel URL</label>
+                <input id="add-url" name="url" type="text" inputmode="url"
+                       placeholder="Paste a YouTube channel URL — e.g. https://youtube.com/@channel" required>
+                <button class="btn btn-primary" type="submit">Add channel</button>
+            </form>
+
+            <div class="toolbar" id="subs-toolbar" hidden>
+                <div class="search">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.2-3.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                    <input id="subs-search" type="search" placeholder="Search channels" aria-label="Search subscribed channels">
+                </div>
+                <label class="sort">Sort
+                    <select id="subs-sort" aria-label="Sort channels">
+                        <option value="added">Recently added</option>
+                        <option value="name">Name (A–Z)</option>
+                        <option value="episodes">Most episodes</option>
+                    </select>
+                </label>
+            </div>
+
+            <div id="bulk-bar" class="bulk-bar" hidden>
+                <span id="bulk-count"></span>
+                <div class="bulk-actions">
+                    <button class="btn btn-ghost" type="button" id="bulk-poll">Poll selected</button>
+                    <button class="btn btn-danger-ghost" type="button" id="bulk-remove">Remove selected</button>
+                    <button class="btn btn-text" type="button" id="bulk-clear">Clear</button>
+                </div>
+            </div>
+
+            <div id="subs-grid" class="grid"></div>
+        </section>
+
+        <section class="section" aria-labelledby="oneoff-h">
+            <div class="section-head">
+                <h2 id="oneoff-h">One-off downloads <span id="oneoff-count" class="count-pill"></span></h2>
+            </div>
+            <form id="dl-form" class="inline-form" autocomplete="off">
+                <label class="visually-hidden" for="dl-url">YouTube video URL</label>
+                <input id="dl-url" name="url" type="text" inputmode="url"
+                       placeholder="Paste a video URL — e.g. https://youtu.be/abc123" required>
+                <label class="check">
+                    <input type="checkbox" id="dl-subscribe"> Also subscribe
+                </label>
+                <button class="btn btn-primary" type="submit">Download</button>
+            </form>
+            <div id="oneoff-grid" class="grid"></div>
+        </section>
+
+        <section class="section" aria-labelledby="cookies-h">
+            <div class="section-head"><h2 id="cookies-h">YouTube cookies</h2></div>
+            <div class="card cookies-card">
+                <div id="cookies-status" class="cookies-status"></div>
+                <form id="cookies-form" class="inline-form" enctype="multipart/form-data">
+                    <input id="cookies-file" name="file" type="file" accept=".txt" required>
+                    <button class="btn btn-primary" type="submit">Upload cookies.txt</button>
+                </form>
+                <div class="cookies-email" id="cookies-email"></div>
+                <details class="howto">
+                    <summary>How to export cookies.txt</summary>
+                    <ol>
+                        <li>Install the <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" rel="noopener">Get cookies.txt LOCALLY</a> extension (Chrome) or <a href="https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/" target="_blank" rel="noopener">cookies.txt</a> (Firefox).</li>
+                        <li>Open <a href="https://www.youtube.com" target="_blank" rel="noopener">youtube.com</a> while logged in.</li>
+                        <li>Click the extension and export as <strong>cookies.txt</strong>.</li>
+                        <li>Upload the file above. Re-upload every few weeks when downloads start failing.</li>
+                    </ol>
+                </details>
+            </div>
+        </section>
     </main>
-    <div class="version">v{VERSION}</div>
+
+    <div id="toaster" class="toaster" aria-live="polite" aria-atomic="false"></div>
+
+    <!-- Feed share dialog -->
+    <div id="share-modal" class="modal" hidden>
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="share-title">
+            <button class="modal-close" type="button" data-close aria-label="Close">&times;</button>
+            <h3 id="share-title">Share feed</h3>
+            <p id="share-name" class="share-name"></p>
+            <div id="share-qr" class="share-qr"></div>
+            <div class="share-url">
+                <input id="share-url-input" type="text" readonly aria-label="Feed URL">
+                <button class="btn btn-ghost" type="button" id="share-copy">Copy</button>
+            </div>
+            <div class="share-apps">
+                <a id="share-pocketcasts" class="btn btn-ghost" target="_blank" rel="noopener">Pocket Casts</a>
+                <a id="share-apple" class="btn btn-ghost">Apple Podcasts</a>
+            </div>
+        </div>
+    </div>
+
+    <noscript><p style="padding:24px;text-align:center">Slipcast's dashboard needs JavaScript enabled.</p></noscript>
+    <div class="version" id="version"></div>
+    <script src="/static/vendor/qrcode.min.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>"""
@@ -585,37 +451,90 @@ def _render_ui() -> str:
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(
-        content=_render_ui(),
-        headers={"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'"},
+        content=_PAGE,
+        headers={"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"},
     )
 
+
+# ---------------------------------------------------------------------------
+# JSON API consumed by the dashboard
+# ---------------------------------------------------------------------------
+
+@app.get("/api/state")
+def api_state():
+    channels = []
+    for ch in db.get_channels():
+        cid = ch["channel_id"]
+        channels.append({
+            "url": ch["url"],
+            "channel_id": cid,
+            "name": ch["channel_name"] or ch["url"],
+            "episodes": _episode_count(cid),
+            "feed_url": _feed_url(cid) if cid else None,
+            "thumbnail": _thumb_url(cid) if cid else None,
+            "added_at": ch["added_at"],
+        })
+
+    unsubscribed = []
+    for ch in db.get_unsubscribed_channels():
+        cid = ch["channel_id"]
+        unsubscribed.append({
+            "channel_id": cid,
+            "name": ch["channel_name"] or cid,
+            "episodes": _episode_count(cid),
+            "feed_url": _feed_url(cid),
+            "thumbnail": _thumb_url(cid),
+        })
+
+    return JSONResponse({
+        "channels": channels,
+        "unsubscribed": unsubscribed,
+        "cookies": cookies_status(),
+        "email": {"configured": notify._smtp_configured(), "address": ALERT_EMAIL},
+        "next_poll": _next_poll_label(),
+        "jobs": jobs.snapshot(),
+        "version": VERSION,
+    })
+
+
+def _ok(message: str, **extra) -> JSONResponse:
+    return JSONResponse({"ok": True, "message": message, **extra})
+
+
+# ---------------------------------------------------------------------------
+# Mutating actions
+# ---------------------------------------------------------------------------
 
 @app.get("/download")
 def download_via_link(url: str, subscribe: bool = False):
     """Shareable link — clicking it downloads a specific video."""
-    threading.Thread(target=download_single, args=[url, subscribe], daemon=True).start()
+    threading.Thread(target=_run_download, args=[url, subscribe], daemon=True).start()
     return RedirectResponse("/", status_code=302)
 
 
 @app.post("/episodes/download")
 def download_episode(url: str = Form(...), subscribe: bool = Form(False)):
-    threading.Thread(target=download_single, args=[url, subscribe], daemon=True).start()
-    return RedirectResponse("/", status_code=302)
+    if not _is_valid_channel_url(url):
+        raise HTTPException(status_code=400, detail="Enter a valid http(s) video URL")
+    threading.Thread(target=_run_download, args=[url, subscribe], daemon=True).start()
+    return _ok("Download started — this can take a minute")
 
 
 @app.get("/add")
 def add_via_link(channel: str):
     """Shareable link — clicking it adds the channel and redirects to the UI."""
     db.add_channel(channel.rstrip("/"))
-    threading.Thread(target=poll_channel, args=[channel], daemon=True).start()
+    threading.Thread(target=_run_poll, args=[channel], daemon=True).start()
     return RedirectResponse("/", status_code=302)
 
 
 @app.post("/channels/add")
 def add_channel(url: str = Form(...)):
+    if not _is_valid_channel_url(url):
+        raise HTTPException(status_code=400, detail="Enter a valid http(s) channel URL")
     db.add_channel(url.rstrip("/"))
-    threading.Thread(target=poll_channel, args=[url], daemon=True).start()
-    return RedirectResponse("/", status_code=302)
+    threading.Thread(target=_run_poll, args=[url], daemon=True).start()
+    return _ok("Channel added — fetching episodes")
 
 
 @app.post("/channels/subscribe")
@@ -626,19 +545,56 @@ def subscribe_channel(channel_id: str = Form(...), channel_name: str = Form(...)
     db.add_channel(channel_page_url)
     db.update_channel_meta(channel_page_url, channel_id, channel_name)
     db.remove_unsubscribed_channel(channel_id)
-    threading.Thread(target=poll_channel, args=[channel_page_url], daemon=True).start()
-    return RedirectResponse("/", status_code=302)
+    threading.Thread(target=_run_poll, args=[channel_page_url, channel_name], daemon=True).start()
+    return _ok(f"Subscribed to {channel_name}")
+
+
+def _remove_one(url: str):
+    rurl = url.rstrip("/")
+    channels = db.get_channels()
+    channel_id = next((ch["channel_id"] for ch in channels if ch["url"] == rurl), None)
+    db.remove_channel(rurl)
+    if channel_id:
+        db.delete_episodes_for_channel(channel_id)
+        remove_channel_data(channel_id)
 
 
 @app.post("/channels/remove")
 def remove_channel(url: str = Form(...)):
+    _remove_one(url)
+    return _ok("Channel removed")
+
+
+@app.post("/channels/remove-bulk")
+async def remove_channels_bulk(request: Request):
+    data = await request.json()
+    urls = [u for u in data.get("urls", []) if isinstance(u, str)]
+    for u in urls:
+        _remove_one(u)
+    return _ok(f"Removed {len(urls)} channel(s)")
+
+
+@app.post("/channels/poll")
+def poll_now(url: str = Form(...)):
+    threading.Thread(target=_run_poll, args=[url], daemon=True).start()
+    return _ok("Polling channel")
+
+
+@app.post("/channels/poll-bulk")
+async def poll_channels_bulk(request: Request):
+    data = await request.json()
+    urls = [u for u in data.get("urls", []) if isinstance(u, str)]
+    for u in urls:
+        threading.Thread(target=_run_poll, args=[u], daemon=True).start()
+    return _ok(f"Polling {len(urls)} channel(s)")
+
+
+@app.post("/channels/poll-all")
+def poll_all_now():
     channels = db.get_channels()
-    channel_id = next((ch["channel_id"] for ch in channels if ch["url"] == url.rstrip("/")), None)
-    db.remove_channel(url.rstrip("/"))
-    if channel_id:
-        db.delete_episodes_for_channel(channel_id)
-        remove_channel_data(channel_id)
-    return RedirectResponse("/", status_code=302)
+    for ch in channels:
+        threading.Thread(target=_run_poll, args=[ch["url"]], daemon=True).start()
+    return _ok(f"Polling {len(channels)} channel(s)")
 
 
 @app.post("/auth/cookies")
@@ -662,7 +618,7 @@ async def upload_cookies(file: UploadFile = File(...)):
         )
     os.replace(tmp_path, COOKIES_FILE)
     logger.info("Cookies file updated (%d bytes)", len(content))
-    return RedirectResponse("/", status_code=302)
+    return _ok("Cookies updated — downloads enabled")
 
 
 @app.post("/auth/test-email")
@@ -673,14 +629,8 @@ def test_email():
             detail="Email alerts not configured — set SMTP_HOST/SMTP_USER/SMTP_PASS in .env",
         )
     if notify.send_cookie_alert(force=True):
-        return RedirectResponse("/?email=sent", status_code=302)
+        return _ok("Test email sent")
     raise HTTPException(status_code=502, detail="Failed to send test email — check server logs")
-
-
-@app.post("/channels/poll")
-def poll_now(url: str = Form(...)):
-    threading.Thread(target=poll_channel, args=[url], daemon=True).start()
-    return RedirectResponse("/", status_code=302)
 
 
 # ---------------------------------------------------------------------------

@@ -122,12 +122,18 @@ def valid_cookie_file(path: str) -> bool:
 
 
 def cookies_status() -> dict:
-    """Return info about the current cookies file."""
+    """Return info about the current cookies file.
+
+    'stale' flags cookies old enough that YouTube has likely expired them
+    (they typically last a few weeks), so the UI can warn before polls fail.
+    """
     if valid_cookie_file(COOKIES_FILE):
         mtime = os.path.getmtime(COOKIES_FILE)
+        age_days = (datetime.now(tz=timezone.utc)
+                    - datetime.fromtimestamp(mtime, tz=timezone.utc)).days
         updated = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        return {"present": True, "updated": updated}
-    return {"present": False, "updated": None}
+        return {"present": True, "updated": updated, "age_days": age_days, "stale": age_days >= 21}
+    return {"present": False, "updated": None, "age_days": None, "stale": False}
 
 
 def _base_ydl_opts() -> dict:
