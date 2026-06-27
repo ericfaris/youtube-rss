@@ -20,6 +20,7 @@ from app import changelog
 from app import database as db
 from app import jobs
 from app import notify
+from app.safety import is_safe_media_name
 from app.config import AUDIO_DIR, ALERT_EMAIL, AUTH_CREDENTIALS, BASE_URL, COOKIES_FILE, POLL_INTERVAL_HOURS, THUMBNAIL_DIR
 from app.downloader import cookies_status, download_single, poll_all, poll_channel, remove_channel_data, valid_cookie_file
 from app.feed import build_feed
@@ -626,6 +627,12 @@ def api_channel_episodes(channel_id: str):
         raise HTTPException(status_code=400, detail="Invalid channel ID")
     episodes = []
     for ep in db.get_episodes(channel_id):
+        # Validate the stored filenames before interpolating them into a path
+        # (defense in depth — see app/safety.py). A bad value yields a null
+        # URL rather than a traversal payload.
+        filename, thumb = ep["filename"], ep["thumbnail"]
+        if not is_safe_media_name(filename):
+            logger.warning("Skipping unsafe audio filename for %s: %r", channel_id, filename)
         episodes.append({
             "id": ep["id"],
             "title": ep["title"],
@@ -637,8 +644,8 @@ def api_channel_episodes(channel_id: str):
             # the episode modal, so they must work under any host and satisfy
             # the default-src/img-src 'self' CSP. (The RSS feed uses absolute
             # BASE_URL URLs separately, in app/feed.py.)
-            "audio_url": f"/audio/{channel_id}/{ep['filename']}",
-            "thumbnail": f"/thumbnails/{channel_id}/{ep['thumbnail']}" if ep["thumbnail"] else None,
+            "audio_url": f"/audio/{channel_id}/{filename}" if is_safe_media_name(filename) else None,
+            "thumbnail": f"/thumbnails/{channel_id}/{thumb}" if is_safe_media_name(thumb) else None,
         })
     return JSONResponse({"channel_id": channel_id, "episodes": episodes})
 

@@ -162,8 +162,8 @@ def test_thumb_url_is_relative_when_present(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "THUMBNAIL_DIR", str(tmp_path))
     url = main._thumb_url(cid)
     assert url == f"/thumbnails/{cid}/channel.jpg"
-    assert not url.startswith("http")          # same-origin
-    assert main.BASE_URL not in url            # no hard-coded host
+    assert url.startswith("/")                  # same-origin, relative
+    assert not url.startswith("//")             # not protocol-relative either
 
 
 def test_thumb_url_none_when_missing(tmp_path, monkeypatch):
@@ -184,8 +184,26 @@ def test_episode_assets_are_relative(tmp_path, monkeypatch):
     ep = json.loads(main.api_channel_episodes(cid).body)["episodes"][0]
     assert ep["audio_url"] == f"/audio/{cid}/vid1.mp3"
     assert ep["thumbnail"] == f"/thumbnails/{cid}/vid1.jpg"
-    assert main.BASE_URL not in ep["audio_url"]
-    assert main.BASE_URL not in ep["thumbnail"]
+    # same-origin relative, not absolute and not protocol-relative
+    for u in (ep["audio_url"], ep["thumbnail"]):
+        assert u.startswith("/") and not u.startswith("//")
+
+
+def test_episode_unsafe_filenames_yield_null_urls(tmp_path, monkeypatch):
+    # Defense in depth: a traversal-shaped filename/thumbnail must never be
+    # interpolated into a path — the endpoint emits null instead.
+    import json
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "ep.db"))
+    db.init_db()
+    cid = "UCabc12345678901234567890"
+    db.upsert_episode({
+        "id": "vid1", "channel_id": cid, "channel_name": "C", "title": "Hello",
+        "description": "", "published": "2026-06-20T00:00:00+00:00", "duration": 1,
+        "filename": "../../../etc/passwd", "filesize": 1, "thumbnail": "../secret.jpg",
+    })
+    ep = json.loads(main.api_channel_episodes(cid).body)["episodes"][0]
+    assert ep["audio_url"] is None
+    assert ep["thumbnail"] is None
 
 
 def test_feed_url_stays_absolute():

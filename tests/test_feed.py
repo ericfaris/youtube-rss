@@ -66,6 +66,34 @@ def test_feed_includes_enclosure_and_metadata(tmp_path, monkeypatch):
     assert enc.get("length") == "123"
 
 
+def test_feed_skips_item_with_unsafe_filename(tmp_path, monkeypatch):
+    # Defense in depth: an entry whose filename can't be safely placed in a
+    # path is dropped rather than emitted with a traversal enclosure URL.
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(feed, "MAX_EPISODES_PER_CHANNEL", 20)
+    good = _ep(1)
+    bad = _ep(2)
+    bad["filename"] = "../../etc/passwd"
+    db.upsert_episode(good)
+    db.upsert_episode(bad)
+    items = _items(feed.build_feed(CID))
+    titles = {it.find("title").text for it in items}
+    assert titles == {"Episode 1"}  # the unsafe one is skipped
+    for it in items:
+        assert "../" not in it.find("enclosure").get("url")
+
+
+def test_feed_omits_unsafe_episode_thumbnail(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(feed, "MAX_EPISODES_PER_CHANNEL", 20)
+    ep = _ep(1)
+    ep["thumbnail"] = "../../evil.jpg"  # filename itself is still safe
+    db.upsert_episode(ep)
+    xml = feed.build_feed(CID)
+    assert b"../" not in xml          # no traversal anywhere in the feed
+    assert len(_items(xml)) == 1      # item still present (only thumb dropped)
+
+
 def test_feed_survives_bad_published_date(tmp_path, monkeypatch):
     _setup_tmp(tmp_path, monkeypatch)
     monkeypatch.setattr(feed, "MAX_EPISODES_PER_CHANNEL", 20)

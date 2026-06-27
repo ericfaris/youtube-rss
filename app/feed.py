@@ -1,9 +1,13 @@
+import logging
 import os
 from datetime import datetime, timezone
 from feedgen.feed import FeedGenerator
 
 from app import database as db
 from app.config import BASE_URL, MAX_EPISODES_PER_CHANNEL, THUMBNAIL_DIR
+from app.safety import is_safe_media_name
+
+logger = logging.getLogger(__name__)
 
 
 def build_feed(channel_id: str) -> bytes:
@@ -35,13 +39,19 @@ def build_feed(channel_id: str) -> bytes:
         # fall back to first episode thumbnail that exists
         channel_image_url = next(
             (f"{BASE_URL}/thumbnails/{channel_id}/{ep['thumbnail']}"
-             for ep in episodes if ep["thumbnail"]),
+             for ep in episodes if is_safe_media_name(ep["thumbnail"])),
             None,
         )
     if channel_image_url:
         fg.podcast.itunes_image(channel_image_url)
 
     for ep in episodes:
+        # An item needs a valid enclosure; skip rather than emit a path built
+        # from an unsafe filename (defense in depth — see app/safety.py).
+        if not is_safe_media_name(ep["filename"]):
+            logger.warning("Skipping feed item with unsafe filename for %s: %r",
+                           channel_id, ep["filename"])
+            continue
         fe = fg.add_entry()
         fe.id(ep["id"])
         fe.title(ep["title"])
@@ -61,7 +71,7 @@ def build_feed(channel_id: str) -> bytes:
         if ep["duration"]:
             fe.podcast.itunes_duration(ep["duration"])
 
-        if ep["thumbnail"]:
+        if is_safe_media_name(ep["thumbnail"]):
             fe.podcast.itunes_image(f"{BASE_URL}/thumbnails/{channel_id}/{ep['thumbnail']}")
 
     return fg.rss_str(pretty=True)
