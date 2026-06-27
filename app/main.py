@@ -281,7 +281,11 @@ def _channel_thumb_exists(channel_id: str) -> bool:
 
 
 def _thumb_url(channel_id: str) -> str | None:
-    return f"{BASE_URL}/thumbnails/{channel_id}/channel.jpg" if _channel_thumb_exists(channel_id) else None
+    # Relative (same-origin) so it loads under any host and satisfies the
+    # img-src 'self' CSP. Only the feed URL (copied into podcast apps) needs
+    # to be absolute; in-browser <img>/<audio> assets must not hard-code
+    # BASE_URL or they break when the UI is reached on a different host.
+    return f"/thumbnails/{channel_id}/channel.jpg" if _channel_thumb_exists(channel_id) else None
 
 
 def _episode_count(channel_id: str | None) -> int:
@@ -629,8 +633,12 @@ def api_channel_episodes(channel_id: str):
             "added_at": ep["created_at"],
             "duration": ep["duration"],
             "filesize": ep["filesize"],
-            "audio_url": f"{BASE_URL}/audio/{channel_id}/{ep['filename']}",
-            "thumbnail": f"{BASE_URL}/thumbnails/{channel_id}/{ep['thumbnail']}" if ep["thumbnail"] else None,
+            # Relative (same-origin) — these feed in-browser <audio>/<img> in
+            # the episode modal, so they must work under any host and satisfy
+            # the default-src/img-src 'self' CSP. (The RSS feed uses absolute
+            # BASE_URL URLs separately, in app/feed.py.)
+            "audio_url": f"/audio/{channel_id}/{ep['filename']}",
+            "thumbnail": f"/thumbnails/{channel_id}/{ep['thumbnail']}" if ep["thumbnail"] else None,
         })
     return JSONResponse({"channel_id": channel_id, "episodes": episodes})
 

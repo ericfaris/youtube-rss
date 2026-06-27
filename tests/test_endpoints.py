@@ -134,6 +134,75 @@ def test_api_channel_episodes_shape(tmp_path, monkeypatch):
     assert ep["audio_url"].endswith(f"/audio/{cid}/vid1.mp3")
 
 
+# --- header has no duplicate "Poll all" button ------------------------------
+
+def test_header_has_no_poll_all_button():
+    # The header "Poll all" button was removed as a duplicate of the polling
+    # dashboard's "Poll all now"; guard against it creeping back.
+    assert 'id="poll-all"' not in main._PAGE
+
+
+def test_dashboard_poll_now_button_kept():
+    # The dashboard's own poll button must remain (it took over the function).
+    assert 'id="poll-now"' in main._PAGE
+
+
+# --- in-browser asset URLs are same-origin (CSP img-src 'self') -------------
+# Channel/episode thumbnails and the modal's audio are loaded into <img>/<audio>
+# in the browser. They must be relative so they work under any host (e.g. via
+# localhost while BASE_URL points at the public domain) and satisfy the
+# default-src/img-src 'self' CSP. Only the feed URL (copied into podcast apps)
+# stays absolute.
+
+def test_thumb_url_is_relative_when_present(tmp_path, monkeypatch):
+    cid = "UCabc12345678901234567890"
+    tdir = tmp_path / cid
+    tdir.mkdir(parents=True)
+    (tdir / "channel.jpg").write_bytes(b"jpegbytes")
+    monkeypatch.setattr(main, "THUMBNAIL_DIR", str(tmp_path))
+    url = main._thumb_url(cid)
+    assert url == f"/thumbnails/{cid}/channel.jpg"
+    assert not url.startswith("http")          # same-origin
+    assert main.BASE_URL not in url            # no hard-coded host
+
+
+def test_thumb_url_none_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "THUMBNAIL_DIR", str(tmp_path))
+    assert main._thumb_url("UCabc12345678901234567890") is None
+
+
+def test_episode_assets_are_relative(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "ep.db"))
+    db.init_db()
+    cid = "UCabc12345678901234567890"
+    db.upsert_episode({
+        "id": "vid1", "channel_id": cid, "channel_name": "C", "title": "Hello",
+        "description": "", "published": "2026-06-20T00:00:00+00:00", "duration": 185,
+        "filename": "vid1.mp3", "filesize": 5_000_000, "thumbnail": "vid1.jpg",
+    })
+    ep = json.loads(main.api_channel_episodes(cid).body)["episodes"][0]
+    assert ep["audio_url"] == f"/audio/{cid}/vid1.mp3"
+    assert ep["thumbnail"] == f"/thumbnails/{cid}/vid1.jpg"
+    assert main.BASE_URL not in ep["audio_url"]
+    assert main.BASE_URL not in ep["thumbnail"]
+
+
+def test_feed_url_stays_absolute():
+    # Copied/shared into podcast apps — must keep the full BASE_URL.
+    url = main._feed_url("UCabc12345678901234567890")
+    assert url.startswith(main.BASE_URL)
+    assert url.endswith(".xml")
+
+
+def test_csp_img_src_is_self_only():
+    # The relative-URL choice above depends on the CSP staying same-origin for
+    # images (no remote hosts allowed). If this loosens, revisit the asset URLs.
+    csp = main.index().headers["Content-Security-Policy"]
+    assert "img-src 'self' data:" in csp
+    assert "default-src 'self'" in csp
+
+
 # --- CSRF -------------------------------------------------------------------
 
 def test_state_changing_detection():

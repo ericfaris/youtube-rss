@@ -8,6 +8,13 @@ whenever you cut a release. ``date`` is the release (commit/tag) date.
 
 CHANGELOG = [
     {
+        "version": "1.8.2",
+        "date": "2026-06-27",
+        "changes": [
+            "Channel and episode thumbnails (and the episode player) now load over whatever host you open the dashboard on — previously they could be blocked by the content security policy when not using the public URL.",
+        ],
+    },
+    {
         "version": "1.8.1",
         "date": "2026-06-27",
         "changes": [
