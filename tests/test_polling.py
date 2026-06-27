@@ -1,4 +1,6 @@
 """Tests for the episode cap (prune) and members-only skip behavior."""
+import os
+
 from app import database as db, downloader
 
 CID = "UCabc12345678901234567890"  # valid channel_id per the regex
@@ -41,6 +43,82 @@ def test_prune_keeps_newest(tmp_path, monkeypatch):
     # get_episodes returns newest-first; kept set should be the 5 most recent
     pubs = [r["published"] for r in remaining]
     assert pubs == sorted(pubs, reverse=True)
+
+
+def test_prune_records_skip_for_deleted(tmp_path, monkeypatch):
+    """Pruned videos are remembered so future polls don't re-download them."""
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(downloader, "MAX_EPISODES_PER_CHANNEL", 2)
+    for i in range(5):
+        db.upsert_episode(_ep(i))  # published ascends with i -> newest = highest i
+    downloader._prune_channel(CID)
+    remaining = {e["id"] for e in db.get_episodes(CID)}
+    assert remaining == {"v004", "v003"}
+    # the three dropped episodes are skip-marked; the kept ones are not
+    assert db.get_skip_video_ids(CID) == {f"v{i:03d}" for i in range(5)} - remaining
+
+
+def test_poll_does_not_redownload_pruned_video(tmp_path, monkeypatch):
+    """Regression: a channel can list an older-dated video at the top of its
+    feed (pinned/premiere/re-upload). The download loop walks channel order
+    while prune keeps newest-by-date, so without a skip record the two fight
+    and re-download the same video every poll, pushing counts past the cap."""
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(downloader, "MAX_EPISODES_PER_CHANNEL", 2)
+    url = "https://www.youtube.com/@SomeChannel"
+    db.add_channel(url)
+    db.update_channel_meta(url, CID, "C")
+
+    dates = {
+        "vAAAAAAAAAA": "2026-06-01T00:00:00+00:00",  # newest
+        "vBBBBBBBBBB": "2026-05-01T00:00:00+00:00",  # 2nd newest
+        "vXXXXXXXXXX": "2025-01-01T00:00:00+00:00",  # old, but listed first
+    }
+
+    def _ep_for(vid):
+        return {
+            "id": vid, "channel_id": CID, "channel_name": "C", "title": vid,
+            "description": "", "published": dates[vid], "duration": 1,
+            "filename": f"{vid}.mp3", "filesize": 1, "thumbnail": None,
+        }
+
+    # Seed the two newest as already-downloaded (files on disk + DB rows).
+    os.makedirs(downloader._audio_dir_for(CID), exist_ok=True)
+    for vid in ("vAAAAAAAAAA", "vBBBBBBBBBB"):
+        open(os.path.join(downloader._audio_dir_for(CID), f"{vid}.mp3"), "wb").close()
+        db.upsert_episode(_ep_for(vid))
+
+    # Channel lists the stale video FIRST — the churn trigger.
+    entries = [{"id": v, "availability": None} for v in ("vXXXXXXXXXX", "vAAAAAAAAAA", "vBBBBBBBBBB")]
+
+    downloaded = []
+
+    def _fake_download(entry, cid, cname):
+        vid = entry["id"]
+        path = os.path.join(downloader._audio_dir_for(cid), f"{vid}.mp3")
+        if os.path.exists(path):
+            return None  # already downloaded — matches the real function
+        open(path, "wb").close()
+        downloaded.append(vid)
+        return _ep_for(vid)
+
+    monkeypatch.setattr(downloader, "_fetch_channel_entries", lambda *a, **k: (entries, CID, "C"))
+    monkeypatch.setattr(downloader, "_download_entry", _fake_download)
+    monkeypatch.setattr(downloader, "valid_cookie_file", lambda _p: True)
+    monkeypatch.setattr(downloader.time, "sleep", lambda _s: None)
+
+    # First poll: X is downloaded (channel order) then pruned (old date) and
+    # recorded as a skip; the cap holds at the two newest by date.
+    downloader.poll_channel(url)
+    assert "vXXXXXXXXXX" in downloaded
+    assert "vXXXXXXXXXX" in db.get_skip_video_ids(CID)
+    assert {e["id"] for e in db.get_episodes(CID)} == {"vAAAAAAAAAA", "vBBBBBBBBBB"}
+
+    # Second poll: X must NOT be re-downloaded, and the count stays at the cap.
+    downloaded.clear()
+    downloader.poll_channel(url)
+    assert downloaded == []
+    assert {e["id"] for e in db.get_episodes(CID)} == {"vAAAAAAAAAA", "vBBBBBBBBBB"}
 
 
 def test_get_channel_id_for_url(tmp_path, monkeypatch):

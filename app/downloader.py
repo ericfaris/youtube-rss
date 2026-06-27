@@ -289,6 +289,13 @@ def _prune_channel(channel_id: str):
             os.remove(filepath)
             logger.info("Pruned %s", filepath)
         db.delete_episode(ep["id"])
+        # Remember it so we never re-download a video we deliberately dropped.
+        # YouTube channel listings aren't strictly chronological (pinned videos,
+        # premieres, re-uploads), so a video the channel lists near the top can
+        # have an upload date that puts it past the cap. Without this, the
+        # download loop (channel order) and prune (upload-date order) fight each
+        # other and re-download the same videos every poll forever.
+        db.add_skip_video(ep["id"], channel_id, "pruned")
 
 
 def poll_channel(channel_url: str):
