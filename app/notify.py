@@ -152,6 +152,111 @@ backlog automatically (or click "Poll Now").
     return msg
 
 
+def _cookie_expiry_message(days_left: int, expires_at: str) -> EmailMessage:
+    upload_url = config.BASE_URL.rstrip("/") + "/"
+    when = "today" if days_left <= 0 else f"in {days_left} day{'s' if days_left != 1 else ''}"
+    msg = EmailMessage()
+    msg["Subject"] = f"⏳ Slipcast: cookies expire {when}"
+    msg["From"] = config.SMTP_FROM
+    msg["To"] = config.ALERT_EMAIL
+
+    plain = f"""\
+Slipcast — heads up
+
+Your YouTube cookies are still working, but they expire {when}
+(on {expires_at}). When they lapse, channel polling will stop and no new
+episodes will download until you upload a fresh cookies.txt.
+
+Refresh now to avoid a gap (takes ~2 minutes):
+
+1. In Chrome, install "Get cookies.txt LOCALLY":
+   https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc
+   (Firefox: https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
+2. Open https://www.youtube.com (signed in is best, but not required).
+3. Click the extension icon and export as cookies.txt
+4. Upload it here: {upload_url}
+"""
+
+    html = f"""\
+<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:#eef2f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2d3d">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef2f5;padding:24px 0">
+    <tr><td align="center">
+      <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.08)">
+        <tr>
+          <td style="background:#b8860b;padding:20px 28px;color:#ffffff;font-size:18px;font-weight:600">
+            ⏳ Slipcast — cookies expire {when}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:24px 28px">
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.5">
+              Your YouTube cookies are <strong>still working</strong>, but they expire
+              <strong>{when}</strong> (on {expires_at}). When they lapse, channel polling
+              stops until you upload a fresh <strong>cookies.txt</strong>.
+            </p>
+            <p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#36558f;text-transform:uppercase;letter-spacing:.03em">
+              Refresh now &nbsp;·&nbsp; ~2 minutes
+            </p>
+            <ol style="margin:0 0 22px;padding-left:20px;font-size:14px;line-height:1.7">
+              <li>Install
+                <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" style="color:#36558f">Get cookies.txt LOCALLY</a>
+                in Chrome
+                (or <a href="https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/" style="color:#36558f">cookies.txt</a> in Firefox).
+              </li>
+              <li>Open <a href="https://www.youtube.com" style="color:#36558f">youtube.com</a>.</li>
+              <li>Click the extension icon and export as <strong>cookies.txt</strong>.</li>
+              <li>Upload it in the management UI.</li>
+            </ol>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 8px">
+              <tr><td style="border-radius:8px;background:#36558f">
+                <a href="{upload_url}" style="display:inline-block;padding:12px 26px;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none">
+                  Open management UI &rarr;
+                </a>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:16px 0 0;font-size:11px;color:#aab6c0">Sent automatically by your self-hosted Slipcast server.</p>
+    </td></tr>
+  </table>
+</body>
+</html>
+"""
+    msg.set_content(plain)
+    msg.add_alternative(html, subtype="html")
+    return msg
+
+
+def send_cookie_expiry_warning(days_left: int, expires_at: str, force: bool = False) -> bool:
+    """Email a 'cookies expiring soon' heads-up while they still work.
+
+    Distinct from send_cookie_alert (which fires once cookies are already
+    missing/invalid). Debounced under its own key so the two don't suppress
+    each other. Returns True if sent.
+    """
+    if not _smtp_configured():
+        logger.info("Cookie expiry warning not sent: SMTP not configured")
+        return False
+
+    cooldown = config.ALERT_COOLDOWN_HOURS * 3600
+    if not force and (time.time() - _last_sent("cookie_expiry")) < cooldown:
+        logger.debug("Cookie expiry warning suppressed (within %dh cooldown)", config.ALERT_COOLDOWN_HOURS)
+        return False
+
+    msg = _cookie_expiry_message(days_left, expires_at)
+    try:
+        _send(msg)
+        _record_sent("cookie_expiry")
+        logger.info("Sent cookie-expiry warning to %s (%d days left)", config.ALERT_EMAIL, days_left)
+        return True
+    except Exception as exc:
+        logger.error("Failed to send cookie expiry warning email: %s", exc)
+        return False
+
+
 def send_cookie_alert(force: bool = False) -> bool:
     """Email a 'refresh your cookies' notice. Debounced; returns True if sent."""
     if not _smtp_configured():

@@ -255,6 +255,55 @@ def test_poll_records_error_run(tmp_path, monkeypatch):
     assert runs[0]["channel_id"] == CID  # resolved from the known URL
 
 
+def test_poll_all_warns_when_cookies_expiring_soon(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(downloader, "valid_cookie_file", lambda _p: True)
+    monkeypatch.setattr(downloader, "COOKIE_EXPIRY_WARN_DAYS", 7)
+    monkeypatch.setattr(downloader, "cookies_status",
+                        lambda: {"expired": False, "days_until_expiry": 3,
+                                 "expires_at": "2026-12-24 12:45 UTC"})
+    calls = []
+    monkeypatch.setattr(downloader.notify, "send_cookie_expiry_warning",
+                        lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(downloader.notify, "send_cookie_alert", lambda *a, **k: calls.append("alert"))
+    monkeypatch.setattr(db, "get_channels", lambda: [])
+
+    downloader.poll_all()
+
+    assert calls == [(3, "2026-12-24 12:45 UTC")]
+
+
+def test_poll_all_no_warning_when_expiry_far_off(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(downloader, "valid_cookie_file", lambda _p: True)
+    monkeypatch.setattr(downloader, "COOKIE_EXPIRY_WARN_DAYS", 7)
+    monkeypatch.setattr(downloader, "cookies_status",
+                        lambda: {"expired": False, "days_until_expiry": 179,
+                                 "expires_at": "2026-12-24 12:45 UTC"})
+    calls = []
+    monkeypatch.setattr(downloader.notify, "send_cookie_expiry_warning",
+                        lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(db, "get_channels", lambda: [])
+
+    downloader.poll_all()
+
+    assert calls == []
+
+
+def test_poll_all_missing_cookies_uses_alert_not_warning(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(downloader, "valid_cookie_file", lambda _p: False)
+    calls = []
+    monkeypatch.setattr(downloader.notify, "send_cookie_alert", lambda *a, **k: calls.append("alert"))
+    monkeypatch.setattr(downloader.notify, "send_cookie_expiry_warning",
+                        lambda *a, **k: calls.append("warn"))
+    monkeypatch.setattr(db, "get_channels", lambda: [])
+
+    downloader.poll_all()
+
+    assert calls == ["alert"]
+
+
 def test_member_only_detection():
     assert downloader._looks_like_member_only("ERROR: [youtube] x: Join this channel to get access")
     assert downloader._looks_like_member_only("This video is members-only content")

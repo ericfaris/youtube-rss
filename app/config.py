@@ -37,4 +37,6 @@ SMTP_FROM = os.environ.get("SMTP_FROM", "") or SMTP_USER
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "ericfaris@gmail.com")
 # Don't re-send the same alert more often than this.
 ALERT_COOLDOWN_HOURS = int(os.environ.get("ALERT_COOLDOWN_HOURS", "24"))
+# Warn by email this many days before the cookies file's parsed expiry date.
+COOKIE_EXPIRY_WARN_DAYS = int(os.environ.get("COOKIE_EXPIRY_WARN_DAYS", "7"))
 

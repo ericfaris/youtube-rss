@@ -11,7 +11,13 @@ import yt_dlp
 
 from app import database as db
 from app import notify
-from app.config import AUDIO_DIR, COOKIES_FILE, MAX_EPISODES_PER_CHANNEL, THUMBNAIL_DIR
+from app.config import (
+    AUDIO_DIR,
+    COOKIE_EXPIRY_WARN_DAYS,
+    COOKIES_FILE,
+    MAX_EPISODES_PER_CHANNEL,
+    THUMBNAIL_DIR,
+)
 
 _CHANNEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -477,6 +483,16 @@ def poll_all():
     if not valid_cookie_file(COOKIES_FILE):
         logger.warning("Cookies file missing/invalid at poll time — alerting")
         notify.send_cookie_alert()
+    else:
+        # Cookies still work but are nearing their parsed expiry — warn ahead of
+        # time so there's no polling gap. Debounced separately from the
+        # "already broken" alert.
+        status = cookies_status()
+        days_left = status.get("days_until_expiry")
+        if (not status.get("expired") and days_left is not None
+                and days_left <= COOKIE_EXPIRY_WARN_DAYS):
+            logger.info("Cookies expire in %d days — sending advance warning", days_left)
+            notify.send_cookie_expiry_warning(days_left, status["expires_at"])
     channels = db.get_channels()
     for ch in channels:
         poll_channel(ch["url"])

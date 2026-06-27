@@ -68,6 +68,40 @@ def test_message_is_well_formed(smtp):
     assert "Upload it here" in plain
 
 
+def test_expiry_warning_sends_when_configured(smtp):
+    assert notify.send_cookie_expiry_warning(5, "2026-12-24 12:45 UTC") is True
+    assert len(smtp) == 1
+
+
+def test_expiry_warning_debounced(smtp):
+    assert notify.send_cookie_expiry_warning(5, "2026-12-24 12:45 UTC") is True
+    assert notify.send_cookie_expiry_warning(5, "2026-12-24 12:45 UTC") is False
+    assert len(smtp) == 1
+
+
+def test_expiry_warning_separate_cooldown_from_missing_alert(smtp):
+    # The two alert kinds must not suppress each other.
+    assert notify.send_cookie_alert() is True
+    assert notify.send_cookie_expiry_warning(3, "2026-12-24 12:45 UTC") is True
+    assert len(smtp) == 2
+
+
+def test_expiry_warning_message_is_well_formed(smtp):
+    msg = notify._cookie_expiry_message(3, "2026-12-24 12:45 UTC")
+    assert msg["To"] == "me@gmail.com"
+    assert "expire" in msg["Subject"].lower()
+    body = msg.get_body(preferencelist=("html",)).get_content()
+    assert "2026-12-24" in body
+    assert "in 3 days" in body
+    assert config.BASE_URL in body
+
+
+def test_expiry_warning_message_singular_and_today(smtp):
+    assert "in 1 day" in notify._cookie_expiry_message(1, "x")["Subject"] \
+        or "in 1 day" in notify._cookie_expiry_message(1, "x").get_body(preferencelist=("plain",)).get_content()
+    assert "today" in notify._cookie_expiry_message(0, "x")["Subject"]
+
+
 def test_send_failure_returns_false(smtp, monkeypatch):
     def boom(msg):
         raise RuntimeError("smtp down")
