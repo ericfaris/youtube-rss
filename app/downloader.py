@@ -295,6 +295,14 @@ def poll_channel(channel_url: str):
     original_url = channel_url.rstrip("/")
     channel_url = original_url + "/videos"
     logger.info("Polling channel: %s", channel_url)
+
+    # Enforce the cap using the channel_id we already know, before fetching.
+    # A fetch that fails (e.g. expired cookies) used to return early and leave
+    # an over-cap channel un-pruned forever; pruning up front fixes that.
+    known_channel_id = db.get_channel_id_for_url(original_url)
+    if known_channel_id:
+        _prune_channel(known_channel_id)
+
     try:
         entries, channel_id, channel_name = _fetch_channel_entries(channel_url, MAX_EPISODES_PER_CHANNEL * 3)
     except Exception as exc:

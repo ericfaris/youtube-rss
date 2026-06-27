@@ -3,11 +3,13 @@ from datetime import datetime, timezone
 from feedgen.feed import FeedGenerator
 
 from app import database as db
-from app.config import BASE_URL, THUMBNAIL_DIR
+from app.config import BASE_URL, MAX_EPISODES_PER_CHANNEL, THUMBNAIL_DIR
 
 
 def build_feed(channel_id: str) -> bytes:
-    episodes = db.get_episodes(channel_id)
+    # Defense in depth: cap the feed itself rather than trusting that pruning
+    # has kept the DB at/under the limit. get_episodes returns newest-first.
+    episodes = db.get_episodes(channel_id)[:MAX_EPISODES_PER_CHANNEL]
     if not episodes:
         return b""
 
@@ -33,7 +35,7 @@ def build_feed(channel_id: str) -> bytes:
         # fall back to first episode thumbnail that exists
         channel_image_url = next(
             (f"{BASE_URL}/thumbnails/{channel_id}/{ep['thumbnail']}"
-             for ep in episodes if ep.get("thumbnail")),
+             for ep in episodes if ep["thumbnail"]),
             None,
         )
     if channel_image_url:

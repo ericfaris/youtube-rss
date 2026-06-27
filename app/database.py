@@ -104,6 +104,14 @@ def get_channels() -> list:
         return conn.execute("SELECT * FROM channels ORDER BY added_at").fetchall()
 
 
+def get_channel_id_for_url(url: str) -> str | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT channel_id FROM channels WHERE url = ?", (url,)
+        ).fetchone()
+        return row["channel_id"] if row and row["channel_id"] else None
+
+
 def update_channel_meta(url: str, channel_id: str, channel_name: str):
     with get_conn() as conn:
         conn.execute(
