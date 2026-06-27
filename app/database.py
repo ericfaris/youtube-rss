@@ -34,6 +34,14 @@ def init_db():
                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS skip_videos (
+                video_id   TEXT PRIMARY KEY,
+                channel_id TEXT NOT NULL,
+                reason     TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
         # migrate existing DBs
         cols = {r[1] for r in conn.execute("PRAGMA table_info(episodes)").fetchall()}
         if "thumbnail" not in cols:
@@ -120,6 +128,28 @@ def upsert_unsubscribed_channel(channel_id: str, channel_name: str):
             "INSERT OR REPLACE INTO unsubscribed_channels (channel_id, channel_name) VALUES (?, ?)",
             (channel_id, channel_name)
         )
+
+
+def add_skip_video(video_id: str, channel_id: str, reason: str = ""):
+    """Remember a video we should not re-attempt on future polls (e.g. members-only)."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO skip_videos (video_id, channel_id, reason) VALUES (?, ?, ?)",
+            (video_id, channel_id, reason),
+        )
+
+
+def get_skip_video_ids(channel_id: str) -> set:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT video_id FROM skip_videos WHERE channel_id = ?", (channel_id,)
+        ).fetchall()
+        return {r["video_id"] for r in rows}
+
+
+def delete_skip_videos_for_channel(channel_id: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM skip_videos WHERE channel_id = ?", (channel_id,))
 
 
 def delete_episodes_for_channel(channel_id: str) -> list:

@@ -556,6 +556,7 @@ def _remove_one(url: str):
     db.remove_channel(rurl)
     if channel_id:
         db.delete_episodes_for_channel(channel_id)
+        db.delete_skip_videos_for_channel(channel_id)
         remove_channel_data(channel_id)
 
 

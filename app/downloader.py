@@ -50,6 +50,27 @@ def _looks_like_auth_error(message: str) -> bool:
     m = (message or "").lower()
     return any(sig in m for sig in _AUTH_ERROR_SIGNALS)
 
+
+# Error fragments that mean a video requires channel membership. During channel
+# polls we record these so we don't waste time re-attempting them every cycle.
+_MEMBER_ONLY_SIGNALS = (
+    "join this channel",
+    "members-only",
+    "members only",
+    "available to this channel's members",
+    "members of this channel",
+)
+
+
+def _looks_like_member_only(message: str) -> bool:
+    m = (message or "").lower()
+    return any(sig in m for sig in _MEMBER_ONLY_SIGNALS)
+
+
+class MemberOnlyError(Exception):
+    """Raised when a video can't be downloaded because it's members-only."""
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -221,6 +242,9 @@ def _download_entry(entry: dict, channel_id: str, channel_name: str) -> dict | N
         with yt_dlp.YoutubeDL(_ydl_opts(channel_id)) as ydl:
             info = ydl.extract_info(url, download=True)
     except yt_dlp.utils.DownloadError as exc:
+        if _looks_like_member_only(str(exc)):
+            # Let the caller decide whether to remember/skip this one.
+            raise MemberOnlyError(video_id) from exc
         logger.warning("Failed to download %s: %s", video_id, exc)
         return None
 
@@ -280,20 +304,41 @@ def poll_channel(channel_url: str):
         return
     db.update_channel_meta(original_url, channel_id, channel_name)
 
-    downloaded = 0
-    for entry in entries:
-        if downloaded >= MAX_EPISODES_PER_CHANNEL:
-            break
-        if entry.get("availability") in ("subscriber_only", "needs_auth", "premium_only"):
-            logger.debug("Skipping member-only video: %s", entry.get("id"))
-            continue
-        result = _download_entry(entry, channel_id, channel_name)
-        if result:
-            db.upsert_episode(result)
-            downloaded += 1
-        time.sleep(1)
-
+    # Enforce the episode cap up front too, so a channel that drifted over the
+    # limit (e.g. an earlier poll was interrupted before it could prune) is
+    # corrected on the very next poll, even if this one is interrupted again.
     _prune_channel(channel_id)
+
+    skip_ids = db.get_skip_video_ids(channel_id)
+    downloaded = 0
+    try:
+        for entry in entries:
+            if downloaded >= MAX_EPISODES_PER_CHANNEL:
+                break
+            video_id = entry.get("id")
+            if video_id in skip_ids:
+                continue
+            if entry.get("availability") in ("subscriber_only", "needs_auth", "premium_only"):
+                logger.debug("Skipping member-only video: %s", video_id)
+                if video_id:
+                    db.add_skip_video(video_id, channel_id, "members_only")
+                continue
+            try:
+                result = _download_entry(entry, channel_id, channel_name)
+            except MemberOnlyError:
+                # Remember it so future polls skip it instantly instead of
+                # re-attempting (and timing out) every single cycle.
+                if video_id:
+                    db.add_skip_video(video_id, channel_id, "members_only")
+                logger.debug("Recorded members-only skip: %s", video_id)
+                continue
+            if result:
+                db.upsert_episode(result)
+                downloaded += 1
+            time.sleep(1)
+    finally:
+        # Always cap to the newest MAX episodes, even if the loop raised.
+        _prune_channel(channel_id)
     logger.info("Done polling %s (%s)", channel_name, channel_id)
 
 
@@ -336,7 +381,13 @@ def download_single(video_url: str, subscribe: bool = False):
         if not any(ch["channel_id"] == channel_id for ch in channels):
             db.upsert_unsubscribed_channel(channel_id, channel_name)
 
-    result = _download_entry({"id": video_id}, channel_id, channel_name)
+    try:
+        result = _download_entry({"id": video_id}, channel_id, channel_name)
+    except MemberOnlyError:
+        # One-off downloads are explicit user requests — don't record a skip,
+        # just report that membership is required.
+        logger.warning("Cannot download members-only video without membership: %s", video_url)
+        return
     if result:
         db.upsert_episode(result)
         logger.info("Downloaded single video: %s", result["title"])
