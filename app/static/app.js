@@ -581,7 +581,6 @@ function init() {
     act(() => postForm('/auth/cookies', fd({ file }))).then(() => { $('#cookies-form').reset(); });
   });
 
-  $('#poll-all').addEventListener('click', () => act(() => postForm('/channels/poll-all', new FormData())));
   $('#poll-now').addEventListener('click', () => act(() => postForm('/channels/poll-all', new FormData())));
   setInterval(tickPoll, 1000);  // live countdown between state refreshes
 

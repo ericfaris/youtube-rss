@@ -373,7 +373,6 @@ _PAGE = """<!DOCTYPE html>
             </div>
             <div class="appbar-actions">
                 <span id="activity" class="activity" hidden><span class="spinner"></span><span id="activity-text">Working…</span></span>
-                <button id="poll-all" class="btn btn-ghost" type="button">Poll all</button>
                 <button id="settings-btn" class="btn btn-icon" type="button" aria-label="Settings" title="Settings">
                     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"/>
