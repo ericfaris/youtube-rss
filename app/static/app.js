@@ -201,7 +201,6 @@ function render() {
   $('#subs-count').textContent = d.channels.length;
   $('#oneoff-count').textContent = d.unsubscribed.length;
   $('#next-poll').textContent = d.next_poll || '';
-  $('#version').textContent = d.version ? `v${d.version}` : '';
 
   // activity indicator
   const running = (d.jobs || []).filter((j) => j.status === 'running');
@@ -325,7 +324,10 @@ function fmtSize(b) {
   return mb >= 1 ? `${mb.toFixed(mb < 10 ? 1 : 0)} MB` : `${Math.round(b / 1024)} KB`;
 }
 function fmtDate(iso) {
-  const d = new Date(iso);
+  // Bare YYYY-MM-DD parses as UTC midnight, which can roll back a day in
+  // negative-offset zones — pin it to local midnight so the date is stable.
+  const s = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00` : iso;
+  const d = new Date(s);
   if (isNaN(d)) return '';
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
@@ -370,6 +372,47 @@ function closeEpisodes() {
   m.hidden = true;
   $('#ep-list').replaceChildren();  // stop any inline audio playback
 }
+
+/* ---- settings / about modal ---- */
+function fmtDateTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function changelogEntry(entry) {
+  const running = state.data && entry.version === state.data.version;
+  const head = el('div', { class: 'cl-head' }, [
+    el('span', { class: 'cl-version', text: `v${entry.version}` }),
+    running ? el('span', { class: 'cl-badge', text: 'running' }) : null,
+    el('span', { class: 'cl-date', text: fmtDate(entry.date) }),
+  ]);
+  const list = el('ul', { class: 'cl-changes' }, (entry.changes || []).map((c) => el('li', { text: c })));
+  return el('div', { class: 'cl-entry' }, [head, list]);
+}
+
+async function openSettings() {
+  const modal = $('#settings-modal');
+  $('#about-version').textContent = state.data ? `v${state.data.version}` : '…';
+  $('#about-started').textContent = '…';
+  const list = $('#changelog-list');
+  list.replaceChildren(el('div', { class: 'ep-empty', text: 'Loading…' }));
+  modal.hidden = false;
+  try {
+    const res = await fetch('/api/changelog');
+    if (!res.ok) throw new Error(await readError(res));
+    const data = await res.json();
+    $('#about-version').textContent = `v${data.version}`;
+    $('#about-started').textContent = fmtDateTime(data.started_at) || '—';
+    list.replaceChildren();
+    (data.entries || []).forEach((e) => list.appendChild(changelogEntry(e)));
+    if (!list.children.length) list.appendChild(el('div', { class: 'ep-empty', text: 'No release notes yet.' }));
+  } catch (e) {
+    list.replaceChildren(el('div', { class: 'ep-empty', text: e.message || 'Failed to load changelog' }));
+  }
+}
+
+function closeSettings() { $('#settings-modal').hidden = true; }
 
 /* ---- copy ---- */
 async function copyText(text, btn) {
@@ -424,7 +467,11 @@ function init() {
   // episodes modal
   $$('#ep-modal [data-close]').forEach((n) => n.addEventListener('click', closeEpisodes));
 
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeShare(); closeEpisodes(); } });
+  // settings / about modal
+  $('#settings-btn').addEventListener('click', openSettings);
+  $$('#settings-modal [data-close]').forEach((n) => n.addEventListener('click', closeSettings));
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeShare(); closeEpisodes(); closeSettings(); } });
 
   loadState();
 }

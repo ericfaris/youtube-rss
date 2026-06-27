@@ -8,6 +8,7 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -15,6 +16,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app import changelog
 from app import database as db
 from app import jobs
 from app import notify
@@ -43,6 +45,10 @@ def _get_version() -> str:
     return version
 
 VERSION = _get_version()
+
+# When this process started — for a locally rebuilt/restarted container this is
+# effectively "deployed at". Shown in the About dialog as "running since".
+STARTED_AT = datetime.now(timezone.utc).isoformat()
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -335,6 +341,12 @@ _PAGE = """<!DOCTYPE html>
             <div class="appbar-actions">
                 <span id="activity" class="activity" hidden><span class="spinner"></span><span id="activity-text">Working…</span></span>
                 <button id="poll-all" class="btn btn-ghost" type="button">Poll all</button>
+                <button id="settings-btn" class="btn btn-icon" type="button" aria-label="Settings" title="Settings">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                </button>
             </div>
         </div>
     </header>
@@ -451,8 +463,23 @@ _PAGE = """<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- Settings / About dialog -->
+    <div id="settings-modal" class="modal" hidden>
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <button class="modal-close" type="button" data-close aria-label="Close">&times;</button>
+            <h3 id="settings-title">About Slipcast</h3>
+            <p class="share-name">Self-hosted YouTube-to-podcast server</p>
+            <dl class="about-meta">
+                <div><dt>Version</dt><dd id="about-version">—</dd></div>
+                <div><dt>Running since</dt><dd id="about-started">—</dd></div>
+            </dl>
+            <h4 class="about-h">Changelog</h4>
+            <div id="changelog-list" class="changelog"></div>
+        </div>
+    </div>
+
     <noscript><p style="padding:24px;text-align:center">Slipcast's dashboard needs JavaScript enabled.</p></noscript>
-    <div class="version" id="version"></div>
     <script src="/static/vendor/qrcode.min.js"></script>
     <script src="/static/app.js"></script>
 </body>
@@ -505,6 +532,15 @@ def api_state():
         "next_poll": _next_poll_label(),
         "jobs": jobs.snapshot(),
         "version": VERSION,
+    })
+
+
+@app.get("/api/changelog")
+def api_changelog():
+    return JSONResponse({
+        "version": VERSION,
+        "started_at": STARTED_AT,
+        "entries": changelog.CHANGELOG,
     })
 
 

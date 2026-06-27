@@ -175,6 +175,8 @@ input[type=text], input[type=search], input[type=file], select {
 .btn-danger-ghost { background: var(--surface); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
 .btn-danger-ghost:hover { background: var(--danger-soft); }
 .btn-sm { padding: 7px 12px; font-size: .8rem; border-radius: 8px; }
+.btn-icon { background: none; color: var(--muted); padding: 8px; border-radius: 9px; }
+.btn-icon:hover { background: var(--surface-2); color: var(--ink); }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 
 /* ---- Toolbar / bulk ---- */
@@ -316,6 +318,20 @@ input[type=text], input[type=search], input[type=file], select {
 .ep-badge.link::after { content: " ›"; opacity: .6; }
 
 .version { position: fixed; bottom: 10px; right: 14px; font-size: .7rem; color: var(--faint); opacity: .7; }
+
+/* ---- Settings / About modal ---- */
+.about-meta { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 14px 0 4px; }
+.about-meta dt { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); }
+.about-meta dd { font-size: .9rem; font-weight: 600; color: var(--ink); margin-top: 2px; }
+.about-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); margin: 18px 0 6px; }
+.changelog { max-height: 52vh; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.cl-entry { border-left: 2px solid var(--border); padding-left: 14px; }
+.cl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cl-version { font-weight: 700; font-size: .92rem; color: var(--ink); }
+.cl-date { font-size: .76rem; color: var(--muted); margin-left: auto; }
+.cl-badge { font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--primary); background: var(--primary-soft); border-radius: 999px; padding: 2px 8px; }
+.cl-changes { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.cl-changes li { font-size: .84rem; color: var(--ink); line-height: 1.45; }
 
 @media (max-width: 560px) {
   .appbar-inner { padding: 0 14px; }
