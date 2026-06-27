@@ -216,6 +216,45 @@ def test_poll_skips_members_only_and_records_skip(tmp_path, monkeypatch):
     assert len(db.get_episodes(CID)) == 2
 
 
+def test_poll_records_ok_run(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(downloader, "MAX_EPISODES_PER_CHANNEL", 20)
+    url = "https://www.youtube.com/@SomeChannel"
+    db.add_channel(url)
+    entries = [{"id": f"v{i:03d}", "availability": None} for i in range(3)]
+    _stub_poll_io(monkeypatch, entries)
+
+    downloader.poll_channel(url)
+
+    runs = db.get_recent_poll_runs()
+    assert len(runs) == 1
+    assert runs[0]["status"] == "ok"
+    assert runs[0]["downloaded"] == 3
+    assert runs[0]["finished_at"]
+
+
+def test_poll_records_error_run(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    url = "https://www.youtube.com/@SomeChannel"
+    db.add_channel(url)
+    db.update_channel_meta(url, CID, "C")
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("Sign in to confirm you're not a bot")
+
+    monkeypatch.setattr(downloader, "_fetch_channel_entries", _boom)
+    monkeypatch.setattr(downloader, "valid_cookie_file", lambda _p: True)
+    monkeypatch.setattr(downloader.notify, "send_cookie_alert", lambda *a, **k: None)
+
+    downloader.poll_channel(url)
+
+    runs = db.get_recent_poll_runs()
+    assert len(runs) == 1
+    assert runs[0]["status"] == "error"
+    assert "bot" in runs[0]["error"]
+    assert runs[0]["channel_id"] == CID  # resolved from the known URL
+
+
 def test_member_only_detection():
     assert downloader._looks_like_member_only("ERROR: [youtube] x: Join this channel to get access")
     assert downloader._looks_like_member_only("This video is members-only content")

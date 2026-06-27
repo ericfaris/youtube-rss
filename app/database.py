@@ -42,6 +42,20 @@ def init_db():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS poll_runs (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id   TEXT,
+                channel_name TEXT,
+                url          TEXT,
+                started_at   TEXT NOT NULL,
+                finished_at  TEXT,
+                status       TEXT NOT NULL,   -- 'ok' | 'error'
+                downloaded   INTEGER NOT NULL DEFAULT 0,
+                error        TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_poll_runs_started ON poll_runs(started_at DESC)")
         # migrate existing DBs
         cols = {r[1] for r in conn.execute("PRAGMA table_info(episodes)").fetchall()}
         if "thumbnail" not in cols:
@@ -102,6 +116,14 @@ def remove_channel(url: str):
 def get_channels() -> list:
     with get_conn() as conn:
         return conn.execute("SELECT * FROM channels ORDER BY added_at").fetchall()
+
+
+def get_channel_meta(channel_id: str):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT url, channel_id, channel_name FROM channels WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
 
 
 def get_channel_id_for_url(url: str) -> str | None:
@@ -167,3 +189,54 @@ def delete_episodes_for_channel(channel_id: str) -> list:
         ).fetchall()
         conn.execute("DELETE FROM episodes WHERE channel_id = ?", (channel_id,))
     return rows
+
+
+# --- poll history -----------------------------------------------------------
+
+# Keep the table bounded; we only ever surface the most recent runs.
+_POLL_RUNS_RETAIN = 300
+
+
+def record_poll_run(run: dict) -> None:
+    """Persist one channel poll outcome. Expected keys: channel_id, channel_name,
+    url, started_at, finished_at, status ('ok'|'error'), downloaded, error."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO poll_runs
+               (channel_id, channel_name, url, started_at, finished_at, status, downloaded, error)
+               VALUES (:channel_id, :channel_name, :url, :started_at, :finished_at, :status, :downloaded, :error)""",
+            {
+                "channel_id": run.get("channel_id"),
+                "channel_name": run.get("channel_name"),
+                "url": run.get("url"),
+                "started_at": run["started_at"],
+                "finished_at": run.get("finished_at"),
+                "status": run["status"],
+                "downloaded": run.get("downloaded", 0),
+                "error": run.get("error"),
+            },
+        )
+        conn.execute(
+            """DELETE FROM poll_runs WHERE id NOT IN
+               (SELECT id FROM poll_runs ORDER BY id DESC LIMIT ?)""",
+            (_POLL_RUNS_RETAIN,),
+        )
+
+
+def get_recent_poll_runs(limit: int = 25) -> list[sqlite3.Row]:
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM poll_runs ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+
+
+def get_last_poll_run_per_channel() -> dict[str, sqlite3.Row]:
+    """Most recent run for each channel_id, keyed by channel_id."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT pr.* FROM poll_runs pr
+               JOIN (SELECT channel_id, MAX(id) AS mid FROM poll_runs
+                     WHERE channel_id IS NOT NULL GROUP BY channel_id) last
+               ON pr.id = last.mid"""
+        ).fetchall()
+    return {r["channel_id"]: r for r in rows}

@@ -8,6 +8,15 @@ whenever you cut a release. ``date`` is the release (commit/tag) date.
 
 CHANGELOG = [
     {
+        "version": "1.6.0",
+        "date": "2026-06-27",
+        "changes": [
+            "New polling dashboard: a countdown to the next poll, overall health, and a log of recent poll runs (per channel, with new-episode counts and errors).",
+            "Each subscribed channel now shows the status of its last poll.",
+            "Polls only consider a channel's newest videos, eliminating wasteful download-then-prune churn that could briefly push a channel over its episode cap.",
+        ],
+    },
+    {
         "version": "1.5.0",
         "date": "2026-06-27",
         "changes": [

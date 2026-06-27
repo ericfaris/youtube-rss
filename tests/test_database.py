@@ -65,6 +65,46 @@ def test_delete_episodes_for_channel_returns_and_removes(tmp_path, monkeypatch):
     assert len(db.get_episodes(CID2)) == 1  # other channel untouched
 
 
+def _run(cid, status="ok", n=0, started="2026-06-27T00:00:00+00:00"):
+    return {
+        "channel_id": cid, "channel_name": "C", "url": "u",
+        "started_at": started, "finished_at": "2026-06-27T00:01:00+00:00",
+        "status": status, "downloaded": n, "error": None,
+    }
+
+
+def test_poll_run_roundtrip_and_order(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    db.record_poll_run(_run(CID, "ok", 2))
+    db.record_poll_run(_run(CID, "error"))
+    runs = db.get_recent_poll_runs()
+    assert len(runs) == 2
+    assert runs[0]["status"] == "error"  # newest first (by id)
+    assert runs[1]["downloaded"] == 2
+
+
+def test_poll_run_retention(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(db, "_POLL_RUNS_RETAIN", 5)
+    for i in range(12):
+        db.record_poll_run(_run(CID, "ok", i))
+    runs = db.get_recent_poll_runs(100)
+    assert len(runs) == 5
+    # only the most recent five survive
+    assert [r["downloaded"] for r in runs] == [11, 10, 9, 8, 7]
+
+
+def test_last_poll_run_per_channel(tmp_path, monkeypatch):
+    _setup_tmp(tmp_path, monkeypatch)
+    db.record_poll_run(_run(CID, "ok", 1))
+    db.record_poll_run(_run(CID, "error"))      # newer for CID
+    db.record_poll_run(_run(CID2, "ok", 3))
+    last = db.get_last_poll_run_per_channel()
+    assert set(last) == {CID, CID2}
+    assert last[CID]["status"] == "error"
+    assert last[CID2]["downloaded"] == 3
+
+
 def test_upsert_episode_is_idempotent_on_id(tmp_path, monkeypatch):
     _setup_tmp(tmp_path, monkeypatch)
     db.upsert_episode(_ep(0))

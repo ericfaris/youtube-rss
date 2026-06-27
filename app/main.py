@@ -225,8 +225,7 @@ def _next_poll_label() -> str:
         return ""
     for job in _scheduler.get_jobs():
         if job.func is poll_all and job.next_run_time:
-            import datetime
-            now = datetime.datetime.now(datetime.timezone.utc)
+            now = datetime.now(timezone.utc)
             delta = job.next_run_time - now
             total = int(delta.total_seconds())
             if total <= 0:
@@ -237,6 +236,40 @@ def _next_poll_label() -> str:
                 return f"next poll in {h}h {m:02d}m"
             return f"next poll in {m}m"
     return ""
+
+
+def _next_poll_at() -> str | None:
+    """ISO timestamp of the next scheduled poll_all run, if known."""
+    if _scheduler is None:
+        return None
+    for job in _scheduler.get_jobs():
+        if job.func is poll_all and job.next_run_time:
+            return job.next_run_time.isoformat()
+    return None
+
+
+def _run_dict(r) -> dict:
+    return {
+        "channel_id": r["channel_id"],
+        "channel_name": r["channel_name"] or r["url"] or "Unknown",
+        "status": r["status"],
+        "downloaded": r["downloaded"],
+        "started_at": r["started_at"],
+        "finished_at": r["finished_at"],
+        "error": r["error"],
+    }
+
+
+def _polling_state() -> dict:
+    runs = db.get_recent_poll_runs(25)
+    last_at = runs[0]["finished_at"] or runs[0]["started_at"] if runs else None
+    return {
+        "interval_hours": POLL_INTERVAL_HOURS,
+        "next_poll_at": _next_poll_at(),
+        "next_poll": _next_poll_label(),
+        "last_poll_at": last_at,
+        "runs": [_run_dict(r) for r in runs],
+    }
 
 
 def _feed_url(channel_id: str) -> str:
@@ -354,10 +387,35 @@ _PAGE = """<!DOCTYPE html>
     <div id="cookie-banner" class="banner" hidden></div>
 
     <main id="main" class="wrap">
+        <section class="section" aria-labelledby="poll-h">
+            <div class="poll-card card" id="poll-card" hidden>
+                <div class="poll-gauge" id="poll-gauge" role="img" aria-label="Time until next poll">
+                    <svg viewBox="0 0 84 84" width="84" height="84" aria-hidden="true">
+                        <circle class="poll-ring-bg" cx="42" cy="42" r="37" fill="none" stroke-width="6"/>
+                        <circle class="poll-ring-fg" id="poll-ring" cx="42" cy="42" r="37" fill="none"
+                                stroke-width="6" stroke-linecap="round" transform="rotate(-90 42 42)"/>
+                    </svg>
+                    <div class="poll-gauge-label">
+                        <span class="poll-gauge-num" id="poll-countdown">—</span>
+                        <span class="poll-gauge-cap">until next</span>
+                    </div>
+                </div>
+                <div class="poll-info">
+                    <div class="poll-title-row">
+                        <h2 id="poll-h">Polling</h2>
+                        <span class="pill" id="poll-interval"></span>
+                        <span class="poll-health" id="poll-health"></span>
+                    </div>
+                    <div class="poll-facts" id="poll-facts"></div>
+                    <div class="poll-runs" id="poll-runs"></div>
+                </div>
+                <button class="btn btn-ghost btn-sm poll-now" id="poll-now" type="button">Poll all now</button>
+            </div>
+        </section>
+
         <section class="section" aria-labelledby="subs-h">
             <div class="section-head">
                 <h2 id="subs-h">Subscribed channels <span id="subs-count" class="count-pill"></span></h2>
-                <div class="next-poll" id="next-poll"></div>
             </div>
 
             <form id="add-form" class="inline-form" autocomplete="off">
@@ -500,6 +558,19 @@ def index():
 
 @app.get("/api/state")
 def api_state():
+    last_runs = db.get_last_poll_run_per_channel()
+
+    def _last_poll(cid):
+        r = last_runs.get(cid) if cid else None
+        if not r:
+            return None
+        return {
+            "status": r["status"],
+            "at": r["finished_at"] or r["started_at"],
+            "downloaded": r["downloaded"],
+            "error": r["error"],
+        }
+
     channels = []
     for ch in db.get_channels():
         cid = ch["channel_id"]
@@ -511,6 +582,7 @@ def api_state():
             "feed_url": _feed_url(cid) if cid else None,
             "thumbnail": _thumb_url(cid) if cid else None,
             "added_at": ch["added_at"],
+            "last_poll": _last_poll(cid),
         })
 
     unsubscribed = []
@@ -530,6 +602,7 @@ def api_state():
         "cookies": cookies_status(),
         "email": {"configured": notify._smtp_configured(), "address": ALERT_EMAIL},
         "next_poll": _next_poll_label(),
+        "polling": _polling_state(),
         "jobs": jobs.snapshot(),
         "version": VERSION,
     })

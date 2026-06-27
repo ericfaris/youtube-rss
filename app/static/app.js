@@ -126,6 +126,19 @@ function epBadge(ch) {
   });
 }
 
+function lastPollBadge(ch) {
+  const lp = ch.last_poll;
+  if (!lp) return null;
+  const failed = lp.status === 'error';
+  return el('span', {
+    class: `poll-tag ${failed ? 'err' : 'ok'}`,
+    title: failed ? (lp.error || 'Last poll failed') : `Last polled ${fmtAgo(lp.at)}`,
+  }, [
+    el('span', { class: `pr-dot ${failed ? 'err' : 'ok'}`, 'aria-hidden': 'true' }),
+    el('span', { text: failed ? 'poll failed' : `polled ${fmtAgo(lp.at)}` }),
+  ]);
+}
+
 function subscribedCard(ch) {
   const selected = state.selected.has(ch.url);
   const card = el('div', { class: `card ch-card${selected ? ' selected' : ''}` });
@@ -141,7 +154,7 @@ function subscribedCard(ch) {
     avatar(ch.name, ch.thumbnail),
     el('div', { class: 'ch-meta' }, [
       el('div', { class: 'ch-name', title: ch.name, text: ch.name }),
-      el('div', { class: 'ch-sub' }, [epBadge(ch)]),
+      el('div', { class: 'ch-sub' }, [epBadge(ch), lastPollBadge(ch)]),
     ]),
   ]));
 
@@ -197,10 +210,10 @@ function render() {
   if (!state.data) return;
   const d = state.data;
 
-  // counts + next poll
+  // counts + polling panel
   $('#subs-count').textContent = d.channels.length;
   $('#oneoff-count').textContent = d.unsubscribed.length;
-  $('#next-poll').textContent = d.next_poll || '';
+  renderPolling(d);
 
   // activity indicator
   const running = (d.jobs || []).filter((j) => j.status === 'running');
@@ -332,6 +345,29 @@ function fmtDate(iso) {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+/* Compact "12m ago" / "in 1h 59m" style relative time. */
+function fmtAgo(iso) {
+  if (!iso) return '';
+  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  const past = secs >= 0;
+  const a = Math.abs(secs);
+  let txt;
+  if (a < 45) txt = 'just now';
+  else if (a < 3600) txt = `${Math.round(a / 60)}m`;
+  else if (a < 86400) { const h = Math.floor(a / 3600), m = Math.round((a % 3600) / 60); txt = m ? `${h}h ${m}m` : `${h}h`; }
+  else txt = `${Math.round(a / 86400)}d`;
+  if (txt === 'just now') return txt;
+  return past ? `${txt} ago` : `in ${txt}`;
+}
+
+function fmtCountdown(secs) {
+  if (secs <= 0) return 'now';
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+  if (h >= 1) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m >= 1) return `${m}m`;
+  return `${secs}s`;
+}
+
 function episodeRow(ep) {
   const meta = [fmtDate(ep.published), fmtDuration(ep.duration), fmtSize(ep.filesize)].filter(Boolean).join(' · ');
   const playWrap = el('div', { class: 'ep-play' });
@@ -414,6 +450,86 @@ async function openSettings() {
 
 function closeSettings() { $('#settings-modal').hidden = true; }
 
+/* ---- polling panel ---- */
+const RING_CIRC = 2 * Math.PI * 37;  // r=37 in the SVG
+
+function runStatus(run) {
+  if (run.status === 'error') return { cls: 'err', label: 'failed' };
+  if (run.downloaded > 0) return { cls: 'ok', label: `+${run.downloaded} new` };
+  return { cls: 'idle', label: 'up to date' };
+}
+
+function pollRunRow(run) {
+  const s = runStatus(run);
+  const right = run.status === 'error'
+    ? el('span', { class: 'pr-status err', title: run.error || 'Poll failed', text: 'failed' })
+    : el('span', { class: `pr-status ${s.cls}`, text: s.label });
+  return el('div', { class: 'pr-row' }, [
+    el('span', { class: `pr-dot ${s.cls}`, 'aria-hidden': 'true' }),
+    el('span', { class: 'pr-name', title: run.channel_name, text: run.channel_name }),
+    el('span', { class: 'pr-time', text: fmtAgo(run.finished_at || run.started_at) }),
+    right,
+  ]);
+}
+
+function renderPolling(d) {
+  const p = d.polling;
+  const card = $('#poll-card');
+  if (!p) { card.hidden = true; return; }
+  card.hidden = false;
+  state.polling = p;
+
+  // schedule pill
+  const iv = p.interval_hours;
+  $('#poll-interval').textContent = `every ${iv === 1 ? 'hour' : `${iv}h`}`;
+
+  // health summary from each channel's last run
+  const fails = (d.channels || []).filter((c) => c.last_poll && c.last_poll.status === 'error');
+  const health = $('#poll-health');
+  if (fails.length) {
+    health.className = 'poll-health bad';
+    health.textContent = `${fails.length} failing`;
+  } else if (d.channels && d.channels.length) {
+    health.className = 'poll-health good';
+    health.textContent = 'all healthy';
+  } else {
+    health.className = 'poll-health';
+    health.textContent = '';
+  }
+
+  // facts line
+  const facts = $('#poll-facts');
+  facts.replaceChildren(
+    el('span', {}, [el('strong', { text: 'Last poll ' }), document.createTextNode(p.last_poll_at ? fmtAgo(p.last_poll_at) : '—')]),
+  );
+
+  // recent activity
+  const runs = $('#poll-runs');
+  runs.replaceChildren();
+  if (!p.runs || !p.runs.length) {
+    runs.appendChild(el('div', { class: 'pr-empty', text: 'No polls yet — they’ll appear here as channels are checked.' }));
+  } else {
+    p.runs.slice(0, 6).forEach((r) => runs.appendChild(pollRunRow(r)));
+  }
+
+  tickPoll();  // paint the gauge immediately
+}
+
+function tickPoll() {
+  const p = state.polling;
+  const ring = $('#poll-ring');
+  const num = $('#poll-countdown');
+  if (!p || !ring || !num) return;
+  if (!p.next_poll_at) { num.textContent = '—'; ring.style.strokeDashoffset = RING_CIRC; return; }
+
+  const remaining = Math.max(0, Math.round((new Date(p.next_poll_at).getTime() - Date.now()) / 1000));
+  const interval = (p.interval_hours || 1) * 3600;
+  const elapsedFrac = Math.min(1, Math.max(0, 1 - remaining / interval));
+  ring.style.strokeDasharray = RING_CIRC;
+  ring.style.strokeDashoffset = RING_CIRC * (1 - elapsedFrac);
+  num.textContent = fmtCountdown(remaining);
+}
+
 /* ---- copy ---- */
 async function copyText(text, btn) {
   try {
@@ -450,6 +566,8 @@ function init() {
   });
 
   $('#poll-all').addEventListener('click', () => act(() => postForm('/channels/poll-all', new FormData())));
+  $('#poll-now').addEventListener('click', () => act(() => postForm('/channels/poll-all', new FormData())));
+  setInterval(tickPoll, 1000);  // live countdown between state refreshes
 
   $('#subs-search').addEventListener('input', (e) => { state.search = e.target.value; render(); });
   $('#subs-sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });

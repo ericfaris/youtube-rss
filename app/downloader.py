@@ -303,10 +303,12 @@ def poll_channel(channel_url: str):
     channel_url = original_url + "/videos"
     logger.info("Polling channel: %s", channel_url)
 
+    started_at = datetime.now(timezone.utc).isoformat()
+    known_channel_id = db.get_channel_id_for_url(original_url)
+
     # Enforce the cap using the channel_id we already know, before fetching.
     # A fetch that fails (e.g. expired cookies) used to return early and leave
     # an over-cap channel un-pruned forever; pruning up front fixes that.
-    known_channel_id = db.get_channel_id_for_url(original_url)
     if known_channel_id:
         _prune_channel(known_channel_id)
 
@@ -316,6 +318,8 @@ def poll_channel(channel_url: str):
         logger.error("Failed to fetch channel %s: %s", channel_url, exc)
         if not valid_cookie_file(COOKIES_FILE) or _looks_like_auth_error(str(exc)):
             notify.send_cookie_alert()
+        _record_run(original_url, known_channel_id, started_at,
+                    status="error", error=str(exc))
         return
     db.update_channel_meta(original_url, channel_id, channel_name)
 
@@ -326,9 +330,16 @@ def poll_channel(channel_url: str):
 
     skip_ids = db.get_skip_video_ids(channel_id)
     downloaded = 0
+    considered = 0  # real (non-skip, non-members) videos seen, in channel order
+    error = None
     try:
         for entry in entries:
-            if downloaded >= MAX_EPISODES_PER_CHANNEL:
+            # Only ever look at the channel's newest MAX videos. Walking deeper
+            # (chasing MAX *new* downloads) would pull videos that sit past the
+            # cap by date, download them, then immediately prune them — wasteful
+            # churn. Channel listings are newest-first, so the top MAX are what
+            # we want to keep.
+            if considered >= MAX_EPISODES_PER_CHANNEL:
                 break
             video_id = entry.get("id")
             if video_id in skip_ids:
@@ -338,23 +349,53 @@ def poll_channel(channel_url: str):
                 if video_id:
                     db.add_skip_video(video_id, channel_id, "members_only")
                 continue
+            considered += 1
             try:
                 result = _download_entry(entry, channel_id, channel_name)
             except MemberOnlyError:
                 # Remember it so future polls skip it instantly instead of
-                # re-attempting (and timing out) every single cycle.
+                # re-attempting (and timing out) every single cycle. It wasn't a
+                # real downloadable video, so don't count it toward the cap.
                 if video_id:
                     db.add_skip_video(video_id, channel_id, "members_only")
                 logger.debug("Recorded members-only skip: %s", video_id)
+                considered -= 1
                 continue
             if result:
                 db.upsert_episode(result)
                 downloaded += 1
-            time.sleep(1)
+                time.sleep(1)
+    except Exception as exc:  # noqa: BLE001 — record then re-raise for visibility
+        error = str(exc)
+        raise
     finally:
         # Always cap to the newest MAX episodes, even if the loop raised.
         _prune_channel(channel_id)
-    logger.info("Done polling %s (%s)", channel_name, channel_id)
+        _record_run(original_url, channel_id, started_at,
+                    status="error" if error else "ok",
+                    downloaded=downloaded, channel_name=channel_name, error=error)
+    logger.info("Done polling %s (%s) — %d new", channel_name, channel_id, downloaded)
+
+
+def _record_run(url, channel_id, started_at, *, status, downloaded=0,
+                channel_name=None, error=None):
+    """Persist a poll outcome; never let bookkeeping break a poll."""
+    if channel_name is None and channel_id:
+        meta = db.get_channel_meta(channel_id)
+        channel_name = meta["channel_name"] if meta else None
+    try:
+        db.record_poll_run({
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+            "url": url,
+            "started_at": started_at,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "status": status,
+            "downloaded": downloaded,
+            "error": error,
+        })
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to record poll run for %s", url)
 
 
 def poll_all():
