@@ -114,8 +114,16 @@ function avatar(name, thumb) {
   return el('span', { class: 'ch-avatar', 'aria-hidden': 'true', text: letter });
 }
 
-function epBadge(n) {
-  return el('span', { class: `ep-badge${n === 0 ? ' zero' : ''}`, text: n === 0 ? 'no episodes yet' : `${n} episode${n === 1 ? '' : 's'}` });
+function epBadge(ch) {
+  const n = ch.episodes;
+  if (n === 0 || !ch.channel_id) {
+    return el('span', { class: `ep-badge${n === 0 ? ' zero' : ''}`, text: n === 0 ? 'no episodes yet' : `${n} episode${n === 1 ? '' : 's'}` });
+  }
+  return el('button', {
+    class: 'ep-badge link', type: 'button', title: 'View episodes',
+    text: `${n} episode${n === 1 ? '' : 's'}`,
+    onclick: () => openEpisodes(ch),
+  });
 }
 
 function subscribedCard(ch) {
@@ -133,7 +141,7 @@ function subscribedCard(ch) {
     avatar(ch.name, ch.thumbnail),
     el('div', { class: 'ch-meta' }, [
       el('div', { class: 'ch-name', title: ch.name, text: ch.name }),
-      el('div', { class: 'ch-sub' }, [epBadge(ch.episodes)]),
+      el('div', { class: 'ch-sub' }, [epBadge(ch)]),
     ]),
   ]));
 
@@ -157,7 +165,7 @@ function oneoffCard(ch) {
       avatar(ch.name, ch.thumbnail),
       el('div', { class: 'ch-meta' }, [
         el('div', { class: 'ch-name', title: ch.name, text: ch.name }),
-        el('div', { class: 'ch-sub' }, [epBadge(ch.episodes)]),
+        el('div', { class: 'ch-sub' }, [epBadge(ch)]),
       ]),
     ]),
     el('div', { class: 'ch-actions' }, [
@@ -303,6 +311,66 @@ function openShare(ch) {
 
 function closeShare() { $('#share-modal').hidden = true; }
 
+/* ---- episodes modal ---- */
+function fmtDuration(s) {
+  if (!s) return '';
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+function fmtSize(b) {
+  if (!b) return '';
+  const mb = b / 1048576;
+  return mb >= 1 ? `${mb.toFixed(mb < 10 ? 1 : 0)} MB` : `${Math.round(b / 1024)} KB`;
+}
+function fmtDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function episodeRow(ep) {
+  const meta = [fmtDate(ep.published), fmtDuration(ep.duration), fmtSize(ep.filesize)].filter(Boolean).join(' · ');
+  const playWrap = el('div', { class: 'ep-play' });
+  playWrap.appendChild(el('button', {
+    class: 'btn btn-ghost btn-sm', type: 'button', text: '▶ Play',
+    onclick: () => playWrap.replaceChildren(el('audio', { controls: true, autoplay: true, preload: 'none', src: ep.audio_url })),
+  }));
+  const children = [];
+  if (ep.thumbnail) children.push(el('img', { class: 'ep-thumb', src: ep.thumbnail, alt: '', loading: 'lazy', onerror: (e) => e.target.remove() }));
+  children.push(el('div', { class: 'ep-body' }, [
+    el('div', { class: 'ep-row-title', title: ep.title, text: ep.title }),
+    el('div', { class: 'ep-row-meta', text: meta }),
+  ]));
+  children.push(playWrap);
+  return el('div', { class: 'ep-row' }, children);
+}
+
+async function openEpisodes(ch) {
+  $('#ep-title').textContent = ch.name;
+  $('#ep-sub').textContent = `${ch.episodes} episode${ch.episodes === 1 ? '' : 's'} being served · newest first`;
+  const list = $('#ep-list');
+  list.replaceChildren(el('div', { class: 'ep-empty', text: 'Loading…' }));
+  $('#ep-modal').hidden = false;
+  try {
+    const res = await fetch(`/api/channels/${encodeURIComponent(ch.channel_id)}/episodes`);
+    if (!res.ok) throw new Error(await readError(res));
+    const data = await res.json();
+    list.replaceChildren();
+    if (!data.episodes.length) { list.appendChild(el('div', { class: 'ep-empty', text: 'No episodes yet.' })); return; }
+    data.episodes.forEach((ep) => list.appendChild(episodeRow(ep)));
+  } catch (e) {
+    list.replaceChildren(el('div', { class: 'ep-empty', text: e.message || 'Failed to load episodes' }));
+  }
+}
+
+function closeEpisodes() {
+  const m = $('#ep-modal');
+  m.hidden = true;
+  $('#ep-list').replaceChildren();  // stop any inline audio playback
+}
+
 /* ---- copy ---- */
 async function copyText(text, btn) {
   try {
@@ -352,7 +420,11 @@ function init() {
   // share modal
   $('#share-copy').addEventListener('click', (e) => copyText($('#share-url-input').value, e.target));
   $$('#share-modal [data-close]').forEach((n) => n.addEventListener('click', closeShare));
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeShare(); });
+
+  // episodes modal
+  $$('#ep-modal [data-close]').forEach((n) => n.addEventListener('click', closeEpisodes));
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeShare(); closeEpisodes(); } });
 
   loadState();
 }

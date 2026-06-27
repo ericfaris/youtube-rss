@@ -298,6 +298,23 @@ input[type=text], input[type=search], input[type=file], select {
 .share-apps { display: flex; gap: 8px; }
 .share-apps .btn { flex: 1; justify-content: center; }
 
+/* ---- Episodes modal ---- */
+.modal-wide { width: min(580px, calc(100vw - 32px)); text-align: left; }
+.modal-wide h3 { text-align: left; }
+.ep-list { margin-top: 10px; max-height: 62vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.ep-row { display: flex; gap: 12px; align-items: center; padding: 10px; border-radius: 10px; }
+.ep-row:hover { background: var(--surface-2); }
+.ep-thumb { width: 68px; height: 42px; border-radius: 6px; object-fit: cover; flex: none; background: var(--surface-2); }
+.ep-body { min-width: 0; flex: 1; }
+.ep-row-title { font-weight: 600; font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-row-meta { font-size: .76rem; color: var(--muted); margin-top: 3px; }
+.ep-play { flex: none; }
+.ep-play audio { height: 34px; max-width: 210px; vertical-align: middle; }
+.ep-empty { padding: 28px 10px; text-align: center; color: var(--muted); }
+.ep-badge.link { cursor: pointer; transition: border-color .15s, color .15s, background .15s; }
+.ep-badge.link:hover { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
+.ep-badge.link::after { content: " ›"; opacity: .6; }
+
 .version { position: fixed; bottom: 10px; right: 14px; font-size: .7rem; color: var(--faint); opacity: .7; }
 
 @media (max-width: 560px) {

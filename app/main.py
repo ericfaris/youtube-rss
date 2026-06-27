@@ -440,6 +440,17 @@ _PAGE = """<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- Episodes list dialog -->
+    <div id="ep-modal" class="modal" hidden>
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="ep-title">
+            <button class="modal-close" type="button" data-close aria-label="Close">&times;</button>
+            <h3 id="ep-title">Episodes</h3>
+            <p id="ep-sub" class="share-name"></p>
+            <div id="ep-list" class="ep-list"></div>
+        </div>
+    </div>
+
     <noscript><p style="padding:24px;text-align:center">Slipcast's dashboard needs JavaScript enabled.</p></noscript>
     <div class="version" id="version"></div>
     <script src="/static/vendor/qrcode.min.js"></script>
@@ -495,6 +506,25 @@ def api_state():
         "jobs": jobs.snapshot(),
         "version": VERSION,
     })
+
+
+@app.get("/api/channels/{channel_id}/episodes")
+def api_channel_episodes(channel_id: str):
+    if not _CHANNEL_ID_RE.match(channel_id):
+        raise HTTPException(status_code=400, detail="Invalid channel ID")
+    episodes = []
+    for ep in db.get_episodes(channel_id):
+        episodes.append({
+            "id": ep["id"],
+            "title": ep["title"],
+            "published": ep["published"],
+            "added_at": ep["created_at"],
+            "duration": ep["duration"],
+            "filesize": ep["filesize"],
+            "audio_url": f"{BASE_URL}/audio/{channel_id}/{ep['filename']}",
+            "thumbnail": f"{BASE_URL}/thumbnails/{channel_id}/{ep['thumbnail']}" if ep["thumbnail"] else None,
+        })
+    return JSONResponse({"channel_id": channel_id, "episodes": episodes})
 
 
 def _ok(message: str, **extra) -> JSONResponse:

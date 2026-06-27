@@ -109,6 +109,31 @@ def test_api_state_shape():
         assert key in data
 
 
+def test_api_channel_episodes_rejects_bad_id():
+    with pytest.raises(HTTPException) as exc:
+        main.api_channel_episodes("../etc/passwd")
+    assert exc.value.status_code == 400
+
+
+def test_api_channel_episodes_shape(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "ep.db"))
+    db.init_db()
+    cid = "UCabc12345678901234567890"
+    db.upsert_episode({
+        "id": "vid1", "channel_id": cid, "channel_name": "C", "title": "Hello",
+        "description": "", "published": "2026-06-20T00:00:00+00:00", "duration": 185,
+        "filename": "vid1.mp3", "filesize": 5_000_000, "thumbnail": None,
+    })
+    data = json.loads(main.api_channel_episodes(cid).body)
+    assert data["channel_id"] == cid
+    assert len(data["episodes"]) == 1
+    ep = data["episodes"][0]
+    for key in ("title", "published", "duration", "filesize", "audio_url"):
+        assert key in ep
+    assert ep["audio_url"].endswith(f"/audio/{cid}/vid1.mp3")
+
+
 # --- CSRF -------------------------------------------------------------------
 
 def test_state_changing_detection():
