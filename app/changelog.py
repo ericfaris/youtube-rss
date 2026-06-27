@@ -8,6 +8,14 @@ whenever you cut a release. ``date`` is the release (commit/tag) date.
 
 CHANGELOG = [
     {
+        "version": "1.7.0",
+        "date": "2026-06-27",
+        "changes": [
+            "The cookies card now shows a concrete expiry date parsed from your cookies.txt, plus a countdown, so you know the hard deadline before polls fail.",
+            "Warns when cookies expire within 7 days, and flags already-expired cookies in red.",
+        ],
+    },
+    {
         "version": "1.6.0",
         "date": "2026-06-27",
         "changes": [

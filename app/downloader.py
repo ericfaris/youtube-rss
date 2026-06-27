@@ -142,19 +142,94 @@ def valid_cookie_file(path: str) -> bool:
     return False
 
 
+# We compute a cookie expiry deadline from the Google/YouTube cookies, since
+# those are what gate Slipcast's access. In practice exports are often *not*
+# logged in — they carry only anonymous visitor cookies (VISITOR_INFO1_LIVE,
+# __Secure-ROLLOUT_TOKEN, …) that still satisfy YouTube's bot check — so we
+# don't require login cookies to be present; we just take the earliest real
+# expiry among the relevant cookies.
+_COOKIE_DOMAIN_SUFFIXES = ("youtube.com", "google.com")
+
+# Cookies that rotate every few hours/days and are refreshed automatically.
+# Including them would report a misleadingly soon deadline (e.g. GPS expires
+# the same day), so they're excluded from the expiry calculation.
+_VOLATILE_COOKIE_NAMES = frozenset({
+    "GPS", "YSC", "OTZ", "SIDCC", "NID",
+    "__Secure-1PSIDTS", "__Secure-3PSIDTS",
+    "__Secure-1PSIDCC", "__Secure-3PSIDCC",
+})
+
+
+def cookie_file_expiry(path: str) -> int | None:
+    """Earliest expiry (unix seconds) among the Google/YouTube cookies in a
+    Netscape cookies file, ignoring session cookies and volatile rotation
+    tokens. Returns None if none are present/parseable.
+
+    This is the file's *hard* deadline — after it, the relevant cookies are
+    gone. YouTube also rotates cookies server-side well before this (see
+    age_days), so treat it as a ceiling, not a prediction.
+    """
+    earliest: int | None = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("#") or not line.strip():
+                    continue
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < 7:
+                    continue
+                domain, name = fields[0].lstrip(".").lower(), fields[5]
+                if not domain.endswith(_COOKIE_DOMAIN_SUFFIXES):
+                    continue
+                if name in _VOLATILE_COOKIE_NAMES:
+                    continue
+                try:
+                    expiry = int(fields[4])
+                except ValueError:
+                    continue
+                if expiry <= 0:  # session cookie — no fixed expiry
+                    continue
+                if earliest is None or expiry < earliest:
+                    earliest = expiry
+    except OSError as exc:
+        logger.warning("Could not read cookies file %s for expiry: %s", path, exc)
+    return earliest
+
+
 def cookies_status() -> dict:
     """Return info about the current cookies file.
 
-    'stale' flags cookies old enough that YouTube has likely expired them
-    (they typically last a few weeks), so the UI can warn before polls fail.
+    Combines two signals so the UI can warn before polls fail:
+    - 'expires_at'/'days_until_expiry': the file's hard expiry, parsed from the
+      login cookies themselves — a known deadline after which auth fails.
+    - 'age_days'/'stale': YouTube rotates cookies server-side every few weeks
+      regardless of the file's stated expiry, so age is the practical estimate.
     """
-    if valid_cookie_file(COOKIES_FILE):
-        mtime = os.path.getmtime(COOKIES_FILE)
-        age_days = (datetime.now(tz=timezone.utc)
-                    - datetime.fromtimestamp(mtime, tz=timezone.utc)).days
-        updated = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        return {"present": True, "updated": updated, "age_days": age_days, "stale": age_days >= 21}
-    return {"present": False, "updated": None, "age_days": None, "stale": False}
+    if not valid_cookie_file(COOKIES_FILE):
+        return {"present": False, "updated": None, "age_days": None, "stale": False,
+                "expires_at": None, "days_until_expiry": None, "expired": False}
+
+    now = datetime.now(tz=timezone.utc)
+    mtime = os.path.getmtime(COOKIES_FILE)
+    age_days = (now - datetime.fromtimestamp(mtime, tz=timezone.utc)).days
+    updated = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    expiry_ts = cookie_file_expiry(COOKIES_FILE)
+    expires_at = None
+    days_until_expiry = None
+    expired = False
+    if expiry_ts is not None:
+        exp_dt = datetime.fromtimestamp(expiry_ts, tz=timezone.utc)
+        expires_at = exp_dt.strftime("%Y-%m-%d %H:%M UTC")
+        days_until_expiry = (exp_dt - now).days
+        expired = exp_dt <= now
+
+    return {
+        "present": True, "updated": updated, "age_days": age_days,
+        "stale": age_days >= 21,
+        "expires_at": expires_at, "days_until_expiry": days_until_expiry,
+        "expired": expired,
+    }
 
 
 def _base_ydl_opts() -> dict:

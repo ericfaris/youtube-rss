@@ -256,18 +256,34 @@ function render() {
 }
 
 function renderCookies(c, email) {
+  // The file carries a hard expiry; YouTube also rotates cookies server-side
+  // every few weeks (age-based 'stale'). Whichever fires first wins the banner.
+  const expSoon = c.present && c.days_until_expiry != null && c.days_until_expiry <= 7 && !c.expired;
   const banner = $('#cookie-banner');
   if (!c.present) {
     banner.hidden = false; banner.className = 'banner is-error';
     banner.innerHTML = '<strong>No YouTube cookies.</strong> Downloads will be blocked until you upload <code>cookies.txt</code> below.';
+  } else if (c.expired) {
+    banner.hidden = false; banner.className = 'banner is-error';
+    banner.innerHTML = `<strong>Cookies expired ${c.expires_at}.</strong> Polls will fail until you upload a fresh <code>cookies.txt</code> below.`;
+  } else if (expSoon) {
+    banner.hidden = false; banner.className = 'banner is-warn';
+    banner.innerHTML = `<strong>Cookies expire in ${c.days_until_expiry} day${c.days_until_expiry === 1 ? '' : 's'}</strong> (${c.expires_at}). Re-upload <code>cookies.txt</code> to avoid failed polls.`;
   } else if (c.stale) {
     banner.hidden = false; banner.className = 'banner is-warn';
-    banner.innerHTML = `<strong>Cookies are ${c.age_days} days old.</strong> YouTube cookies usually expire after a few weeks — re-upload soon to avoid failed polls.`;
+    banner.innerHTML = `<strong>Cookies are ${c.age_days} days old.</strong> YouTube usually rotates cookies after a few weeks — re-upload soon to avoid failed polls.`;
   } else { banner.hidden = true; }
 
-  const dot = !c.present ? 'bad' : c.stale ? 'warn' : 'ok';
-  const label = !c.present ? 'No cookies' : c.stale ? 'Cookies aging' : 'Cookies active';
-  const sub = c.present ? `updated ${c.updated}` : 'YouTube may block downloads';
+  const dot = !c.present || c.expired ? 'bad' : (expSoon || c.stale) ? 'warn' : 'ok';
+  const label = !c.present ? 'No cookies'
+    : c.expired ? 'Cookies expired'
+    : expSoon ? 'Cookies expiring'
+    : c.stale ? 'Cookies aging'
+    : 'Cookies active';
+  let sub;
+  if (!c.present) sub = 'YouTube may block downloads';
+  else if (c.expires_at) sub = `expires ${c.expires_at}${c.days_until_expiry != null && !c.expired ? ` (${c.days_until_expiry}d)` : ''} · updated ${c.updated}`;
+  else sub = `updated ${c.updated}`;
   $('#cookies-status').replaceChildren(
     el('span', { class: `dot ${dot}` }),
     el('span', { text: label }),
